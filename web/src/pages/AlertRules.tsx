@@ -1806,56 +1806,101 @@ function ChannelsField({
     else onChange([...selectedIds, id]);
   };
 
-  // Effective fallback channels — match the backend resolver (router.go
-  // ChannelsFor): when no channel is pinned at the rule level, every
-  // ENABLED instance whose severity floor / scope filter matches the
-  // incident gets the notification. The SPA can't compute scope (we don't
-  // know the incident shape yet) but enabled+severity is the dominant
-  // filter, and listing those is far more honest than the implicit
-  // "nothing selected = nothing notified" the picker visually suggests.
-  // We don't auto-check them in the form because the storage shape is
-  // intentionally "empty = use defaults"; the chips are informational so
-  // operators see WYSIWYG without flipping the persistence semantics.
+  // Master "default" checkbox: checked ↔ selectedIds is empty ↔ backend
+  // falls back to "every enabled channel whose severity floor / scope
+  // matches" (router.go ChannelsFor). Storage shape stays empty-array =
+  // use defaults; the master checkbox is just a visible handle on that
+  // semantics so 0 ticks doesn't look like 0 notifications.
   const fallbackChannels = useMemo(
     () => channels.filter((c) => c.enabled),
     [channels],
   );
-  const showFallbackHint = selectedIds.length === 0 && fallbackChannels.length > 0;
+  const isDefault = selectedIds.length === 0;
+  const toggleDefault = () => {
+    // checking master = clear all selection (return to fallback)
+    // unchecking master without picking anything = ambiguous; treat as
+    // "switch to custom mode but pick nothing yet" — the per-type rows
+    // become interactive and the operator picks. Storage stays empty
+    // until they actually tick something, so the resolver fallback is
+    // still in effect until then. Matches the operator's expectation:
+    // "I unchecked default, now I'll pick my own."
+    if (!isDefault) {
+      onChange([]);
+    }
+    // when isDefault and they click master, do nothing — they have to
+    // toggle a per-type row to leave default mode (avoids the empty
+    // "neither default nor specific" state).
+  };
 
   return (
     <Field label={tr('通知方式', 'Notification channels')}>
       <div className="space-y-1.5">
-        {showFallbackHint && (
-          <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-[11px] text-amber-200/90">
-            <div className="mb-1 font-medium">
+        {/* Master "默认" row. Checked = empty selectedIds (use fallback).
+            Lists the actual channels that would fire so 0-tick != 0 notify. */}
+        <div
+          className={cn(
+            'rounded-md border px-2.5 py-2 transition',
+            isDefault
+              ? 'border-accent/40 bg-accent/5'
+              : 'border-zinc-800 bg-zinc-950/40',
+          )}
+        >
+          <label className="flex cursor-pointer items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={isDefault}
+              onChange={toggleDefault}
+              className="h-3.5 w-3.5 rounded border-zinc-700 bg-zinc-900"
+            />
+            <span className={cn('font-medium', isDefault ? 'text-accent' : 'text-zinc-300')}>
+              {tr('默认', 'Default')}
+            </span>
+            <span className="text-[10px] text-zinc-500">
               {tr(
-                '未勾选 ≠ 不通知。规则未选渠道时,会走全部"已启用 + severity 达标"的渠道（resolver fallback)。',
-                "No selection ≠ no notification. When a rule pins nothing, the resolver falls back to every enabled channel whose severity floor matches.",
+                '（命中全部"已启用 + severity 达标"的渠道）',
+                '(fire to every enabled channel whose severity floor matches)',
               )}
-            </div>
-            <div className="flex flex-wrap gap-1">
-              {fallbackChannels.map((c) => (
-                <span
-                  key={c.id}
-                  className="inline-flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-200"
-                  title={tr(
-                    `当前规则不选任何渠道时会命中:${c.name} (${c.type})`,
-                    `Will fire to ${c.name} (${c.type}) when this rule has nothing pinned.`,
+            </span>
+          </label>
+          {isDefault && (
+            <div className="mt-1.5 flex flex-wrap gap-1 pl-5">
+              {fallbackChannels.length === 0 ? (
+                <span className="text-[10px] text-zinc-500">
+                  {tr(
+                    '当前没有任何已启用的渠道。去 设置 → 通知 配一个。',
+                    'No enabled channels yet. Configure one in Settings → Notifications.',
                   )}
-                >
-                  <span className="opacity-70">⌘</span>
-                  {c.name}
                 </span>
-              ))}
-            </div>
-            <div className="mt-1.5 text-[10px] text-amber-200/60">
-              {tr(
-                '想只通知部分渠道,在下面勾上对应类型即可 — 一旦勾选,fallback 不再生效。',
-                'To narrow it down, tick the channels below — pinning any disables the fallback.',
+              ) : (
+                fallbackChannels.map((c) => (
+                  <span
+                    key={c.id}
+                    className="inline-flex items-center gap-1 rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent"
+                    title={tr(
+                      `当前默认会命中:${c.name} (${c.type})`,
+                      `Currently fires to ${c.name} (${c.type})`,
+                    )}
+                  >
+                    {c.name}
+                    <span className="opacity-60">· {c.type}</span>
+                  </span>
+                ))
               )}
             </div>
-          </div>
-        )}
+          )}
+          {!isDefault && (
+            <div className="mt-1 pl-5 text-[10px] text-zinc-500">
+              {tr(
+                '已切到自定义模式 — 只通知下面勾选的渠道。要回默认就勾上方框。',
+                'Custom mode — only the channels ticked below get notified. Tick the box above to revert to default.',
+              )}
+            </div>
+          )}
+        </div>
+        {/* Per-type rows. In default mode they're shown dimmed so the
+            operator sees them as "options to switch to", not as the
+            current effective state. Ticking any auto-flips out of default. */}
+        <div className={cn('space-y-1.5 transition', isDefault && 'opacity-50')}>
         {CHANNEL_TYPE_ORDER.map(({ type, icon: Icon }) => {
           const instances = byType[type] ?? [];
           const total = instances.length;
@@ -2032,6 +2077,7 @@ function ChannelsField({
             </div>
           );
         })}
+        </div>
       </div>
       <div className="mt-1.5 flex items-center justify-between text-[11px] text-zinc-500">
         <span>
