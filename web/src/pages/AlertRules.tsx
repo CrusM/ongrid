@@ -1815,11 +1815,17 @@ function ChannelsField({
     () => channels.filter((c) => c.enabled),
     [channels],
   );
-  // Two-mode picker: "default" or "custom". Storage shape stays the same —
-  // empty selectedIds = fallback (router.go ChannelsFor 全 fan-out);
-  // non-empty = explicit pin. UI just gives a clear handle on which mode
-  // is active so 0 ticks doesn't look like 0 notify.
-  const isDefault = selectedIds.length === 0;
+  // Two-mode picker: "default" or "custom". Storage stays the same:
+  // empty selectedIds = backend fallback (router.go ChannelsFor 全 fan-out);
+  // non-empty = explicit pin. The local `customOverride` flag lets the
+  // operator un-tick every sub-item without the master flipping back to
+  // default — because "I picked nothing on purpose" and "I haven't decided
+  // yet" look identical in storage (both []), so without this flag the
+  // moment the last tick goes the master would re-engage and re-lock the
+  // sub-items. Flag is per-session; on close+reopen we return to the
+  // storage-driven semantics so the persisted shape always wins.
+  const [customOverride, setCustomOverride] = useState(false);
+  const isDefault = !customOverride && selectedIds.length === 0;
   const toggleDefault = () => {
     if (isDefault) {
       // Switch to custom mode with EVERY enabled channel auto-picked so
@@ -1828,9 +1834,11 @@ function ChannelsField({
       // delivery is unchanged at this instant — same channels fire —
       // but now the rule has an explicit pin so adding a new channel
       // later won't silently widen the blast radius.
+      setCustomOverride(true);
       onChange(fallbackChannels.map((c) => c.id));
     } else {
       // Back to default mode = clear pin = backend goes back to fallback.
+      setCustomOverride(false);
       onChange([]);
     }
   };
@@ -1891,11 +1899,19 @@ function ChannelsField({
               )}
             </div>
           )}
-          {!isDefault && (
+          {!isDefault && selectedIds.length > 0 && (
             <div className="mt-1 pl-5 text-[10px] text-zinc-500">
               {tr(
                 '已切到自定义模式 — 下面已自动勾上全部渠道,你可以取消不想要的;要回默认就勾上方框。',
                 'Custom mode — all channels are pre-ticked below; untick the ones you don\'t want. Tick the box above to revert to default.',
+              )}
+            </div>
+          )}
+          {!isDefault && selectedIds.length === 0 && (
+            <div className="mt-1 pl-5 text-[10px] text-amber-300/80">
+              {tr(
+                '⚠ 自定义模式下当前没勾任何渠道,但保存后等效"默认"(后端 fallback 仍会 fan-out 到全部已启用渠道)。要真的静默该规则,改用上方"禁用规则"开关。',
+                '⚠ Nothing ticked in custom mode — on save this is indistinguishable from default (backend fallback still fans out to all enabled channels). To actually silence this rule, use the "Enabled" toggle above.',
               )}
             </div>
           )}
