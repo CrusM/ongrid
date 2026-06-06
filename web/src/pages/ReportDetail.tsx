@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, RefreshCw, Share2, Trash2 } from 'lucide-react';
+import { ArrowLeft, Download, RefreshCw, Share2, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { fullDateTime } from '@/lib/format';
 import { usePoll } from '@/lib/usePoll';
@@ -74,7 +74,16 @@ export default function ReportDetailPage() {
               {report.timezone}
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2 print:hidden">
+            {report.status === 'ready' && (
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
+              >
+                <Download size={12} /> {tr('导出 PDF', 'Export PDF')}
+              </button>
+            )}
             {canMutate && report.status === 'ready' && (
               <button
                 type="button"
@@ -103,7 +112,14 @@ export default function ReportDetailPage() {
         )}
       </header>
 
-      <div className="flex-1 overflow-y-auto px-6 py-5">
+      <div className="report-print-area flex-1 overflow-y-auto px-6 py-5">
+        {/* Print-only title block (the app header is hidden when printing) */}
+        <div className="mx-auto mb-4 hidden max-w-4xl border-b border-zinc-300 pb-3 print:block">
+          <h1 className="text-lg font-semibold">{report.title}</h1>
+          <div className="mt-0.5 text-xs text-zinc-500">
+            {report.generated_at && fullDateTime(report.generated_at)} · {report.timezone}
+          </div>
+        </div>
         <div className="mx-auto max-w-4xl">
           {report.status === 'failed' ? (
             <div className="rounded-lg border border-red-700/40 bg-red-900/20 p-4 text-sm text-red-200">

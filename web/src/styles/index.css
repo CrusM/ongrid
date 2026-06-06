@@ -498,3 +498,43 @@ html.light .react-flow__minimap-mask {
   stroke: rgb(71, 85, 105); /* slate-600 outline */
   stroke-width: 1;
 }
+
+/* --- Report PDF export (HLD-014). window.print() isolates the report
+   body: hide all app chrome, force a light print theme, and let the
+   .report-print-area flow as the printed document. --- */
+@media print {
+  /* Hide everything, then reveal only the report content. */
+  body * {
+    visibility: hidden;
+  }
+  .report-print-area,
+  .report-print-area * {
+    visibility: visible;
+  }
+  .report-print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    overflow: visible !important;
+    padding: 0 !important;
+    background: white !important;
+    color: black !important;
+  }
+  /* Light-ink the dark cards so they print legibly on white. */
+  .report-print-area * {
+    color: black !important;
+    border-color: #d4d4d8 !important;
+    background-image: none !important;
+  }
+  .report-print-area .tabular-nums {
+    color: #111 !important;
+  }
+  /* Keep a stat row from splitting across a page break. */
+  .report-print-area section {
+    break-inside: avoid;
+  }
+  @page {
+    margin: 14mm;
+  }
+}

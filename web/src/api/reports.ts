@@ -80,6 +80,18 @@ export type ChangeFact = {
   actor?: string;
 };
 
+export type AssetFacts = {
+  new_agents: number;
+  new_skills: number;
+  new_repos: number;
+};
+
+export type UsageFacts = {
+  sessions: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+};
+
 export type ReportContent = {
   version: string;
   hero: HeroStat[];
@@ -89,6 +101,8 @@ export type ReportContent = {
   key_incidents?: KeyIncident[];
   actions_summary: ActionsSummary;
   changes?: ChangeFact[];
+  assets: AssetFacts;
+  usage: UsageFacts;
   advice?: Advice[];
 };
 

@@ -59,6 +59,8 @@ func (c *FactsCollector) Collect(ctx context.Context, period, prev bizreport.Per
 	facts.AlertCounts = c.collectAlertCounts(ctx, period, scope)
 	facts.Fleet = c.collectFleet(ctx)
 	facts.Changes = c.collectChanges(ctx, period)
+	facts.Assets = c.collectAssets(ctx, period)
+	facts.Usage = c.collectUsage(ctx, period)
 	facts.Resource = c.collectResource(ctx, period)
 	facts.Hero = c.buildHero(period, prev, scope, incidents, facts.Actions, facts.Fleet, facts.Resource, c.countIncidents(ctx, prev, scope))
 	return facts, nil
@@ -244,6 +246,48 @@ func (c *FactsCollector) collectChanges(ctx context.Context, p bizreport.Period)
 		})
 	}
 	return out
+}
+
+// --- assets created this period (user_agents / installed_skills / knowledge_repos) ---
+
+func (c *FactsCollector) collectAssets(ctx context.Context, p bizreport.Period) bizreport.AssetFacts {
+	var a bizreport.AssetFacts
+	count := func(table, tsCol string) int {
+		var n int64
+		_ = c.db.WithContext(ctx).Table(table).
+			Where(tsCol+" >= ? AND "+tsCol+" < ?", p.Start, p.End).
+			Count(&n).Error
+		return int(n)
+	}
+	a.NewAgents = count("user_agents", "created_at")
+	a.NewSkills = count("installed_skills", "installed_at")
+	a.NewRepos = count("knowledge_repos", "created_at")
+	return a
+}
+
+// --- usage (chat sessions + LLM token spend) ---
+
+func (c *FactsCollector) collectUsage(ctx context.Context, p bizreport.Period) bizreport.UsageFacts {
+	var u bizreport.UsageFacts
+	var sessions int64
+	_ = c.db.WithContext(ctx).Table("chat_sessions").
+		Where("created_at >= ? AND created_at < ?", p.Start, p.End).
+		Where("kind = ?", "user").
+		Count(&sessions).Error
+	u.Sessions = int(sessions)
+
+	type tokRow struct {
+		Prompt     int64
+		Completion int64
+	}
+	var tok tokRow
+	_ = c.db.WithContext(ctx).Table("chat_messages").
+		Select("COALESCE(SUM(prompt_tokens),0) as prompt, COALESCE(SUM(completion_tokens),0) as completion").
+		Where("created_at >= ? AND created_at < ?", p.Start, p.End).
+		Scan(&tok).Error
+	u.PromptTokens = tok.Prompt
+	u.CompletionTokens = tok.Completion
+	return u
 }
 
 // --- incidents / actions / alerts (unchanged from prior) ---

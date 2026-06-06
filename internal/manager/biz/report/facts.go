@@ -40,6 +40,28 @@ type ReportFacts struct {
 	// Changes is the period's product-side change log (audit_logs):
 	// rule / setting / device / channel / user edits. "Who changed what."
 	Changes []ChangeFact `json:"changes"`
+
+	// Assets is what was newly added to the platform this period —
+	// custom assistants, skills, knowledge repos. The "我们建设了什么" row.
+	Assets AssetFacts `json:"assets"`
+
+	// Usage is the platform-usage signal: chat sessions + LLM token spend
+	// over the period. The "用了多少" row.
+	Usage UsageFacts `json:"usage"`
+}
+
+// AssetFacts counts platform assets created within the period.
+type AssetFacts struct {
+	NewAgents int `json:"new_agents"`
+	NewSkills int `json:"new_skills"`
+	NewRepos  int `json:"new_repos"`
+}
+
+// UsageFacts is the platform-usage summary over the period.
+type UsageFacts struct {
+	Sessions         int   `json:"sessions"`
+	PromptTokens     int64 `json:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens"`
 }
 
 // ResourceFacts is the fleet resource trend over the period. Available

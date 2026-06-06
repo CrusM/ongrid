@@ -160,6 +160,8 @@ func (g *workerGenerator) generate(ctx context.Context, rpt *model.Report) error
 	content.Fleet = facts.Fleet
 	content.Actions = facts.Actions
 	content.Changes = facts.Changes
+	content.Assets = facts.Assets
+	content.Usage = facts.Usage
 	content.KeyIncidents = mergeIncidents(facts.Incidents, content.KeyIncidents)
 	content.Version = ContentVersion
 	content.Metadata = ContentMeta{

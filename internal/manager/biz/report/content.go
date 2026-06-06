@@ -30,6 +30,8 @@ type Content struct {
 	KeyIncidents []KeyIncident  `json:"key_incidents"`
 	Actions      ActionsSummary `json:"actions_summary"`
 	Changes      []ChangeFact   `json:"changes,omitempty"`
+	Assets       AssetFacts     `json:"assets"`
+	Usage        UsageFacts     `json:"usage"`
 	Advice       []Advice       `json:"advice"`
 	Metadata     ContentMeta    `json:"metadata"`
 }
