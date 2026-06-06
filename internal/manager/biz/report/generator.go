@@ -34,6 +34,11 @@ type GeneratorConfig struct {
 	// Empty → "en" per feedback_ai_output_locale (auto-triggered LLM
 	// output follows ONGRID_DEFAULT_LOCALE).
 	DefaultLocale string
+	// PublicURL is the manager's externally-reachable base ("https://
+	// host"). Used to build the "view full report" deep link in IM
+	// deliveries. Empty → a relative /reports/{id} path (still useful
+	// for same-origin IM clients).
+	PublicURL string
 }
 
 // workerGenerator implements Generator: it turns a pending report into a
@@ -45,13 +50,15 @@ type workerGenerator struct {
 	repo      Repo
 	facts     FactsCollector
 	spawner   WorkerSpawner
+	deliverer Deliverer // nil = in-app only
 	cfg       GeneratorConfig
 	log       *slog.Logger
 }
 
 // NewWorkerGenerator builds the real generator. A nil spawner or facts
 // collector is a wiring error and panics — main.go always supplies both.
-func NewWorkerGenerator(repo Repo, facts FactsCollector, spawner WorkerSpawner, cfg GeneratorConfig, log *slog.Logger) Generator {
+// The Deliverer is optional (nil = in-app only, no IM push).
+func NewWorkerGenerator(repo Repo, facts FactsCollector, spawner WorkerSpawner, cfg GeneratorConfig, log *slog.Logger) *workerGenerator {
 	if repo == nil || facts == nil || spawner == nil {
 		panic("report: nil dependency to NewWorkerGenerator")
 	}
@@ -68,6 +75,13 @@ func NewWorkerGenerator(repo Repo, facts FactsCollector, spawner WorkerSpawner, 
 		log = slog.Default()
 	}
 	return &workerGenerator{repo: repo, facts: facts, spawner: spawner, cfg: cfg, log: log.With(slog.String("comp", "report-generator"))}
+}
+
+// WithDeliverer attaches the IM deliverer. Returns the receiver for
+// chaining. nil-safe — passing nil keeps in-app-only behaviour.
+func (g *workerGenerator) WithDeliverer(d Deliverer) *workerGenerator {
+	g.deliverer = d
+	return g
 }
 
 // Generate runs the full pipeline for one report id. Always reaches a
@@ -165,7 +179,45 @@ func (g *workerGenerator) generate(ctx context.Context, rpt *model.Report) error
 	g.log.Info("report ready",
 		slog.String("report_id", rpt.ID),
 		slog.Int("incidents", len(facts.Incidents)))
+
+	// Deliver to IM channels (ready reports only — the locked decision).
+	// Best-effort: a delivery failure is recorded in delivery_json, not
+	// fatal to the (already-persisted) ready report.
+	g.deliver(ctx, rpt)
 	return nil
+}
+
+// deliver pushes a ready report to the schedule's channels and records
+// the per-channel outcome. No-op when there's no deliverer, no owning
+// schedule, or no channels configured (in-app-only reports).
+func (g *workerGenerator) deliver(ctx context.Context, rpt *model.Report) {
+	if g.deliverer == nil || rpt.ScheduleID == nil {
+		return
+	}
+	s, err := g.repo.GetSchedule(ctx, *rpt.ScheduleID)
+	if err != nil {
+		return
+	}
+	var channelIDs []uint64
+	if s.ChannelIDsJSON != "" {
+		_ = json.Unmarshal([]byte(s.ChannelIDsJSON), &channelIDs)
+	}
+	if len(channelIDs) == 0 {
+		return
+	}
+	summary := deliveryFor(rpt, g.deepLink(rpt.ID))
+	records := g.deliverer.Deliver(ctx, summary, channelIDs)
+	recordDelivery(rpt, records)
+	if err := g.repo.UpdateReport(ctx, rpt); err != nil {
+		g.log.Warn("persist delivery records failed", slog.String("report_id", rpt.ID), slog.Any("err", err))
+	}
+}
+
+// deepLink builds the "view full report" URL. Absolute when PublicURL is
+// configured, else a relative path.
+func (g *workerGenerator) deepLink(id string) string {
+	base := strings.TrimRight(g.cfg.PublicURL, "/")
+	return base + "/reports/" + id
 }
 
 func (g *workerGenerator) fail(ctx context.Context, rpt *model.Report, reason string) {

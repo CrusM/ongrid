@@ -1550,9 +1550,10 @@ func main() {
 			reportRT,
 			managerbizreport.GeneratorConfig{
 				DefaultLocale: firstNonEmpty(os.Getenv("ONGRID_DEFAULT_LOCALE"), "en"),
+				PublicURL:     cfg.PublicURL,
 			},
 			log,
-		)
+		).WithDeliverer(reportDelivererShim{channels: alertRepo, router: notifyRouter})
 		reportUC := managerbizreport.NewUsecase(reportRepo, reportGen, uuid.NewString).
 			WithReadRepo(reportRepo)
 		managerbizreport.NewScheduler(reportUC, log).Start(rootCtx)
@@ -2297,6 +2298,62 @@ func (s chatruntimeSpawnerShim) GetWorker(workerID string) (*aiopstools.WorkerHa
 		return nil, false
 	}
 	return workerToHandle(w), true
+}
+
+// reportDelivererShim implements bizreport.Deliverer over the alert
+// channel store + notify router, so biz/report stays free of the
+// notify / alert imports. For each channel id it loads the
+// notification_channels row, builds the matching notify.Sender
+// (BuildSenderFromChannel — same path the alert notifier uses), and
+// sends the report summary as a markdown message. v1 ships the
+// markdown-text form across every channel type; a Feishu interactive
+// card is a future enhancement that would extend notify.Sender.
+type reportDelivererShim struct {
+	channels *manageralertdata.Repo
+	router   *notify.Router
+}
+
+func (s reportDelivererShim) Deliver(ctx context.Context, summary managerbizreport.DeliverySummary, channelIDs []uint64) []managerbizreport.DeliveryRecord {
+	out := make([]managerbizreport.DeliveryRecord, 0, len(channelIDs))
+	for _, id := range channelIDs {
+		rec := managerbizreport.DeliveryRecord{ChannelID: id, SentAt: time.Now().UTC()}
+		ch, err := s.channels.GetChannelByID(ctx, id)
+		if err != nil {
+			rec.Status = "failed"
+			rec.Error = "channel not found"
+			out = append(out, rec)
+			continue
+		}
+		rec.ChannelType = ch.ChannelType
+		if !ch.Enabled {
+			rec.Status = "failed"
+			rec.Error = "channel disabled"
+			out = append(out, rec)
+			continue
+		}
+		sender, err := managerbizalert.BuildSenderFromChannel(ch)
+		if err != nil {
+			rec.Status = "failed"
+			rec.Error = err.Error()
+			out = append(out, rec)
+			continue
+		}
+		msg := notify.Message{
+			Subject:    summary.Title,
+			Body:       summary.MarkdownSummary(),
+			Severity:   notify.SeverityInfo,
+			Source:     "report",
+			OccurredAt: time.Now().UTC(),
+		}
+		if err := s.router.SendVia(ctx, msg, sender); err != nil {
+			rec.Status = "failed"
+			rec.Error = err.Error()
+		} else {
+			rec.Status = "sent"
+		}
+		out = append(out, rec)
+	}
+	return out
 }
 
 // workerToHandle copies the chatruntime.Worker fields the tools layer
