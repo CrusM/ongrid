@@ -132,17 +132,17 @@ export default function ReportsPage() {
         <div className="overflow-hidden rounded-xl border border-zinc-800/60 bg-zinc-900/40">
           <table className="w-full table-fixed text-sm">
             <colgroup>
+              <col className="w-44" />
               <col />
               <col className="w-28" />
-              <col className="w-44" />
               <col className="w-24" />
               <col className="w-28" />
             </colgroup>
             <thead className="border-b border-zinc-800/60 bg-zinc-950/40 text-[11px] uppercase tracking-wider text-zinc-500">
               <tr>
-                <th className="px-5 py-3 text-left">{tr('报告', 'Report')}</th>
+                <th className="px-5 py-3 text-left">{tr('周期', 'Period')}</th>
+                <th className="px-4 py-3 text-left">{tr('报告', 'Report')}</th>
                 <th className="px-4 py-3 text-left">{tr('类型', 'Kind')}</th>
-                <th className="px-4 py-3 text-left">{tr('周期', 'Period')}</th>
                 <th className="px-4 py-3 text-left">{tr('状态', 'Status')}</th>
                 <th className="px-5 py-3 text-right">{tr('生成时间', 'Generated')}</th>
               </tr>
@@ -169,12 +169,13 @@ export default function ReportsPage() {
                     className="cursor-pointer transition-colors hover:bg-zinc-900/40"
                     onClick={() => navigate(`/reports/${r.id}`)}
                   >
+                    {/* Period leads the row (chronological scan) but stays
+                        modest grey so it doesn't drown out the summary. */}
+                    <td className="truncate px-5 py-3 text-zinc-300">{periodLabel(r.title)}</td>
                     {/* REPORT cell — the summary/headline is the personalized
                         name (descriptive, distinct per report); falls back to
-                        a generating/period label before content lands. The
-                        date is demoted to its own Period column so it no
-                        longer drowns out the summary. */}
-                    <td className="truncate px-5 py-3 font-medium text-zinc-100">
+                        a generating/failed placeholder before content lands. */}
+                    <td className="truncate px-4 py-3 font-medium text-zinc-100">
                       {r.summary
                         ? r.summary
                         : r.status === 'failed'
@@ -186,7 +187,6 @@ export default function ReportsPage() {
                         {tr(KIND_ZH[r.kind] ?? r.kind, KIND_EN[r.kind] ?? r.kind)}
                       </span>
                     </td>
-                    <td className="truncate px-4 py-3 text-xs text-zinc-500">{periodLabel(r.title)}</td>
                     <td className="whitespace-nowrap px-4 py-3">
                       <span className={cn('inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium', STATUS_STYLE[r.status])}>
                         {tr(STATUS_ZH[r.status], STATUS_EN[r.status])}
