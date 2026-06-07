@@ -29,6 +29,7 @@ import (
 
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/errgroup"
 
@@ -115,7 +116,9 @@ import (
 
 	managerbizaudit "github.com/ongridio/ongrid/internal/manager/biz/audit"
 	manageraudtdata "github.com/ongridio/ongrid/internal/manager/data/audit/store"
+	managerbizreport "github.com/ongridio/ongrid/internal/manager/biz/report"
 	managerreportdata "github.com/ongridio/ongrid/internal/manager/data/report/store"
+	managerserverreport "github.com/ongridio/ongrid/internal/manager/server/report"
 	managerserveraiops "github.com/ongridio/ongrid/internal/manager/server/aiops"
 	managerserveralert "github.com/ongridio/ongrid/internal/manager/server/alert"
 	managerserveraudit "github.com/ongridio/ongrid/internal/manager/server/audit"
@@ -1532,6 +1535,42 @@ func main() {
 		alertUC.SetInvestigator(chained)
 	}
 
+	// Report scheduler + API (HLD-014): scheduled operational reports.
+	// Wired only when the chat runtime is the graph kernel — the reporter
+	// worker spawns through the same SpawnWorker seam the investigator
+	// uses. New tables / new goroutine / new routes; no impact on
+	// existing startup. reportHandler stays nil when not wired so the
+	// route-mount block below skips it.
+	var reportHandler *managerserverreport.Handler
+	if reportRT, ok := aiopsRuntime.(*aiopschatruntime.Runtime); ok && reportRT != nil {
+		reportRepo := managerreportdata.NewRepo(db)
+		// Pass the prom query client for fleet resource trends; a typed-nil
+		// guard mirrors the tools wiring so a missing client stays a clean
+		// untyped nil (collector degrades Resource.Available=false).
+		var reportProm managerreportdata.PromQuerier
+		if promQueryClient != nil {
+			reportProm = promQueryClient
+		}
+		reportGen := managerbizreport.NewWorkerGenerator(
+			reportRepo,
+			managerreportdata.NewFactsCollector(db, reportProm),
+			reportRT,
+			managerbizreport.GeneratorConfig{
+				DefaultLocale: firstNonEmpty(os.Getenv("ONGRID_DEFAULT_LOCALE"), "en"),
+				PublicURL:     cfg.PublicURL,
+			},
+			log,
+		).WithDeliverer(reportDelivererShim{channels: alertRepo, router: notifyRouter})
+		reportUC := managerbizreport.NewUsecase(reportRepo, reportGen, uuid.NewString).
+			WithReadRepo(reportRepo).
+			WithDefaultLocale(firstNonEmpty(os.Getenv("ONGRID_DEFAULT_LOCALE"), "en"))
+		managerbizreport.NewScheduler(reportUC, log).Start(rootCtx)
+		reportHandler = managerserverreport.NewHandler(reportUC)
+		log.Info("report: scheduler + API wired")
+	} else {
+		log.Info("report: not wired (chat runtime is not the graph kernel)")
+	}
+
 	// Boot compensation pass for the structured RCA path: incidents that
 	// fired while no LLM provider was configured had their auto-investigation
 	// silently skipped (RecordFiring nil-checks the investigator), so the
@@ -1801,8 +1840,18 @@ func main() {
 			marketplaceHandler.Register(protected)
 			promProxyHandler.RegisterProtected(protected)
 			managerserveraudit.NewHandler(auditUC).Register(protected)
+			if reportHandler != nil {
+				reportHandler.Register(protected)
+			}
 		})
 	})
+
+	// Public (unauthenticated) report share route: /r/{token}. Mounted
+	// on the root mux outside the auth group so a shared report opens
+	// without a login (30-day TTL enforced in the biz layer).
+	if reportHandler != nil {
+		reportHandler.RegisterPublic(mux)
+	}
 
 	apiServer := httpserver.New(cfg.HTTPAddr, mux, log.With(slog.String("listener", "api")))
 
@@ -2257,6 +2306,62 @@ func (s chatruntimeSpawnerShim) GetWorker(workerID string) (*aiopstools.WorkerHa
 		return nil, false
 	}
 	return workerToHandle(w), true
+}
+
+// reportDelivererShim implements bizreport.Deliverer over the alert
+// channel store + notify router, so biz/report stays free of the
+// notify / alert imports. For each channel id it loads the
+// notification_channels row, builds the matching notify.Sender
+// (BuildSenderFromChannel — same path the alert notifier uses), and
+// sends the report summary as a markdown message. v1 ships the
+// markdown-text form across every channel type; a Feishu interactive
+// card is a future enhancement that would extend notify.Sender.
+type reportDelivererShim struct {
+	channels *manageralertdata.Repo
+	router   *notify.Router
+}
+
+func (s reportDelivererShim) Deliver(ctx context.Context, summary managerbizreport.DeliverySummary, channelIDs []uint64) []managerbizreport.DeliveryRecord {
+	out := make([]managerbizreport.DeliveryRecord, 0, len(channelIDs))
+	for _, id := range channelIDs {
+		rec := managerbizreport.DeliveryRecord{ChannelID: id, SentAt: time.Now().UTC()}
+		ch, err := s.channels.GetChannelByID(ctx, id)
+		if err != nil {
+			rec.Status = "failed"
+			rec.Error = "channel not found"
+			out = append(out, rec)
+			continue
+		}
+		rec.ChannelType = ch.ChannelType
+		if !ch.Enabled {
+			rec.Status = "failed"
+			rec.Error = "channel disabled"
+			out = append(out, rec)
+			continue
+		}
+		sender, err := managerbizalert.BuildSenderFromChannel(ch)
+		if err != nil {
+			rec.Status = "failed"
+			rec.Error = err.Error()
+			out = append(out, rec)
+			continue
+		}
+		msg := notify.Message{
+			Subject:    summary.Title,
+			Body:       summary.MarkdownSummary(),
+			Severity:   notify.SeverityInfo,
+			Source:     "report",
+			OccurredAt: time.Now().UTC(),
+		}
+		if err := s.router.SendVia(ctx, msg, sender); err != nil {
+			rec.Status = "failed"
+			rec.Error = err.Error()
+		} else {
+			rec.Status = "sent"
+		}
+		out = append(out, rec)
+	}
+	return out
 }
 
 // workerToHandle copies the chatruntime.Worker fields the tools layer

@@ -110,6 +110,13 @@ type Report struct {
 	PeriodEnd   time.Time `gorm:"column:period_end;not null"`
 	Timezone    string    `gorm:"column:timezone;size:64;not null"`
 
+	// Locale is the output language for the report's prose (narrative +
+	// advice) and the markdown section titles. For a manual generate it's
+	// the requester's Accept-Language (en/zh); for a scheduled fire it's
+	// "" → the generator falls back to ONGRID_DEFAULT_LOCALE. See
+	// feedback_ai_output_locale.
+	Locale string `gorm:"column:locale;size:8;not null;default:''"`
+
 	// ScopeJSON snapshots the data filter this report was generated with
 	// (copied from the schedule, or supplied directly for a manual
 	// generate). Kept on the artifact so a report stays reproducible /

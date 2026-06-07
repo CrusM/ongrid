@@ -58,10 +58,27 @@ func (nopGenerator) Generate(context.Context, string) {}
 
 // Usecase is the report business logic.
 type Usecase struct {
-	repo Repo
-	gen  Generator
+	repo  Repo
+	read  ReadRepo // attached via WithReadRepo for the API path; nil on the scheduler-only path
+	gen   Generator
 	idGen IDGen
+	// defaultLocale stamps scheduled (headless) reports' title + content
+	// language; manual generate/run-now override it with the requester's
+	// Accept-Language. Empty → Chinese title default. Set via
+	// WithDefaultLocale in main.go (ONGRID_DEFAULT_LOCALE).
+	defaultLocale string
 }
+
+// WithDefaultLocale sets the headless/scheduled report locale (the
+// generator's DefaultLocale). Builder-style so the test callsites stay
+// on the 3-arg NewUsecase.
+func (u *Usecase) WithDefaultLocale(locale string) *Usecase {
+	u.defaultLocale = locale
+	return u
+}
+
+// errExpiredShare is returned when a share token has passed its TTL.
+var errExpiredShare = errors.Join(errs.ErrNotFound, errors.New("share link expired"))
 
 // NewUsecase builds the Usecase. A nil Generator falls back to the
 // no-op (report stays pending — useful in PR-1 tests and before PR-2
@@ -78,6 +95,42 @@ func NewUsecase(repo Repo, gen Generator, idGen IDGen) *Usecase {
 		gen = nopGenerator{}
 	}
 	return &Usecase{repo: repo, gen: gen, idGen: idGen}
+}
+
+// CreateSchedule validates a new schedule and arms its initial
+// next_fire_at, then persists it. Used by the API (PR-4) and the chat
+// tool. For preset kinds with an empty CronSpec, the default cron for
+// that kind is filled in; custom kind requires an explicit spec.
+//
+// `now` is the reference time the first next_fire_at is computed after
+// (injected so tests are deterministic; callers pass time.Now().UTC()).
+func (u *Usecase) CreateSchedule(ctx context.Context, s *model.ReportSchedule, now time.Time) error {
+	if s.CronSpec == "" && s.Kind != model.KindCustom {
+		spec, err := CronSpecForKind(s.Kind)
+		if err != nil {
+			return err
+		}
+		s.CronSpec = spec
+	}
+	loc, err := loadLocation(s.Timezone)
+	if err != nil {
+		return err
+	}
+	next, err := CronNext(s.CronSpec, loc, now)
+	if err != nil {
+		return err
+	}
+	if s.ScopeJSON == "" {
+		s.ScopeJSON = "{}"
+	}
+	if s.ChannelIDsJSON == "" {
+		s.ChannelIDsJSON = "[]"
+	}
+	if s.AgentPersona == "" {
+		s.AgentPersona = model.DefaultReporterPersona
+	}
+	s.NextFireAt = &next
+	return u.repo.CreateSchedule(ctx, s)
 }
 
 // FireSchedule generates one report for a due schedule and re-arms its
@@ -136,19 +189,23 @@ func (u *Usecase) FireSchedule(ctx context.Context, s *model.ReportSchedule, fir
 // GenerateNow creates an ad-hoc report not bound to a schedule (manual
 // "generate now", API PR-4). scheduleID is nil so the dedup unique key
 // doesn't apply — every manual trigger produces a fresh row.
-func (u *Usecase) GenerateNow(ctx context.Context, createdBy uint64, kind, tz, scopeJSON string, period Period) (*model.Report, error) {
+func (u *Usecase) GenerateNow(ctx context.Context, createdBy uint64, kind, tz, scopeJSON, locale string, period Period) (*model.Report, error) {
 	if _, err := loadLocation(tz); err != nil {
 		return nil, err
+	}
+	if locale == "" {
+		locale = u.defaultLocale
 	}
 	rpt := &model.Report{
 		ID:          u.idGen(),
 		ScheduleID:  nil,
 		CreatedBy:   createdBy,
-		Title:       TitleFor(kind, period),
+		Title:       TitleFor(kind, period, locale),
 		Kind:        kind,
 		PeriodStart: period.Start,
 		PeriodEnd:   period.End,
 		Timezone:    tz,
+		Locale:      locale,
 		Status:      model.StatusPending,
 		ErrorMsg:    "",
 		ContentJSON: "",
@@ -169,11 +226,12 @@ func (u *Usecase) buildPendingReport(s *model.ReportSchedule, p Period) *model.R
 		ID:            u.idGen(),
 		ScheduleID:    &id,
 		CreatedBy:     s.CreatedBy,
-		Title:         TitleFor(s.Kind, p),
+		Title:         TitleFor(s.Kind, p, u.defaultLocale),
 		Kind:          s.Kind,
 		PeriodStart:   p.Start,
 		PeriodEnd:     p.End,
 		Timezone:      s.Timezone,
+		Locale:        u.defaultLocale,
 		Status:        model.StatusPending,
 		ErrorMsg:      "",
 		ContentJSON:   "",

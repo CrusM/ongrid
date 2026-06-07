@@ -16,6 +16,9 @@ const TracesPage = lazy(() => import('@/pages/Traces'));
 const AlertsPage = lazy(() => import('@/pages/Alerts'));
 const AlertRulesPage = lazy(() => import('@/pages/AlertRules'));
 const IncidentDetailPage = lazy(() => import('@/pages/IncidentDetail'));
+const ReportsPage = lazy(() => import('@/pages/Reports'));
+const ReportDetailPage = lazy(() => import('@/pages/ReportDetail'));
+const ReportSchedulesPage = lazy(() => import('@/pages/ReportSchedules'));
 const SkillsPage = lazy(() => import('@/pages/Skills'));
 const SkillRunPage = lazy(() => import('@/pages/SkillRun'));
 const AgentsPage = lazy(() => import('@/pages/Agents'));
@@ -96,6 +99,9 @@ export default function App() {
         <Route path="/alerts" element={<AlertsPage />} />
         <Route path="/alerts/rules" element={<AlertRulesPage />} />
         <Route path="/alerts/incidents/:id" element={<IncidentDetailPage />} />
+        <Route path="/reports" element={<ReportsPage />} />
+        <Route path="/reports/schedules" element={<ReportSchedulesPage />} />
+        <Route path="/reports/:id" element={<ReportDetailPage />} />
         <Route path="/skills" element={<SkillsPage />} />
         <Route path="/skills/:key" element={<SkillRunPage />} />
         <Route path="/agents" element={<AgentsPage />} />

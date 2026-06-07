@@ -18,6 +18,7 @@ import {
   UsersRound,
   ChartLine,
   FileText,
+  FileBarChart,
   Waypoints,
   Siren,
   Wrench,
@@ -437,6 +438,7 @@ export function Sidebar() {
           <SidebarNavItem to="/logs" icon={FileText} label={tr('日志', 'Logs')} />
           <SidebarNavItem to="/traces" icon={Waypoints} label={tr('链路', 'Traces')} />
           <SidebarNavItem to="/alerts" icon={Siren} label={tr('告警', 'Alerts')} badge={incidentOpen} />
+          <SidebarNavItem to="/reports" icon={FileBarChart} label={tr('报告', 'Reports')} />
         </CollapsibleSection>
 
         <SectionLabel>{tr('会话', 'Sessions')}</SectionLabel>

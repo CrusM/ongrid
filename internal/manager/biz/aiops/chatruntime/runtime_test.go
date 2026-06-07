@@ -538,3 +538,71 @@ func (f *fakeTool) Info(_ context.Context) (*basetool.ToolInfo, error) {
 func (f *fakeTool) InvokableRun(_ context.Context, _ string, _ ...basetool.InvokeOption) (string, error) {
 	return `{"ok":true}`, nil
 }
+
+// TestBuildEinoHistory_DropsOrphanToolMessage reproduces the .91 session
+// eff73a55 corruption: parallel tools (get_host_processes, query_promql)
+// completed out of issue-order, so query_promql's real response was
+// persisted under the synthetic id "query_promql|einoToolAdapter" while
+// an autoheal stub filled the real call_B slot. The assistant turn then
+// survives the completeness precheck (both real ids have a row), but the
+// orphan synthetic-id row used to be emitted bare in natural order →
+// provider 400 "Messages with role 'tool' must be a response to a
+// preceding message with 'tool_calls'". buildEinoHistory must drop it.
+func TestBuildEinoHistory_DropsOrphanToolMessage(t *testing.T) {
+	callA, callB := "call_00_aaa", "call_01_bbb"
+	asst := &model.Message{
+		ID:      "asst-1",
+		Role:    model.RoleAssistant,
+		Content: strPtr("checking host + metrics"),
+		ToolCalls: []model.ToolCall{
+			{ToolName: "get_host_processes", LLMCallID: strPtr(callA), ArgumentsJSON: "{}"},
+			{ToolName: "query_promql", LLMCallID: strPtr(callB), ArgumentsJSON: "{}"},
+		},
+	}
+	rows := []*model.Message{
+		{ID: "u0", Role: model.RoleUser, Content: strPtr("load + cpu?")},
+		asst,
+		// real get_host_processes response (correct id)
+		{ID: "t-a", Role: model.RoleTool, ToolCallID: strPtr(callA), ToolName: strPtr("get_host_processes"), Content: strPtr(`{"procs":[]}`)},
+		// ORPHAN: query_promql's real response stamped with the synthetic
+		// adapter id after the out-of-order completion.
+		{ID: "t-orphan", Role: model.RoleTool, ToolCallID: strPtr("query_promql|einoToolAdapter"), ToolName: strPtr("query_promql"), Content: strPtr(`{"resultType":"matrix"}`)},
+		// autoheal stub filling the real call_B slot.
+		{ID: "t-b", Role: model.RoleTool, ToolCallID: strPtr(callB), ToolName: strPtr("query_promql"), Content: strPtr(`{"error":"tool response was not persisted","autoheal":true}`)},
+		{ID: "u1", Role: model.RoleUser, Content: strPtr("1+2")},
+	}
+
+	out := buildEinoHistory(rows)
+
+	// Every tool message must carry an id that the assistant actually
+	// emitted — no orphan synthetic-id row survives.
+	valid := map[string]bool{callA: true, callB: true}
+	toolCount := 0
+	for k, msg := range out {
+		if msg.Role != schema.RoleType(model.RoleTool) {
+			continue
+		}
+		toolCount++
+		if !valid[msg.ToolCallID] {
+			t.Errorf("orphan tool message survived: id=%q at %d", msg.ToolCallID, k)
+		}
+		// A tool message must be preceded (somewhere before) by an
+		// assistant carrying a matching tool_call id.
+		if k == 0 || out[k-1].Role == schema.RoleType(model.RoleUser) {
+			t.Errorf("tool message at %d not preceded by an assistant/tool", k)
+		}
+	}
+	if toolCount != 2 {
+		t.Errorf("emitted %d tool messages, want 2 (callA + callB stub)", toolCount)
+	}
+	// The assistant slot must be present with both tool_calls.
+	var sawAsst bool
+	for _, msg := range out {
+		if msg.Role == schema.RoleType(model.RoleAssistant) && len(msg.ToolCalls) == 2 {
+			sawAsst = true
+		}
+	}
+	if !sawAsst {
+		t.Error("assistant turn with 2 tool_calls missing from replay")
+	}
+}

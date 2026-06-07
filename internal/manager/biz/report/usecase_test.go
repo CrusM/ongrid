@@ -226,11 +226,11 @@ func TestGenerateNow_NoScheduleNoDedup(t *testing.T) {
 		End:   time.Date(2026, 6, 8, 0, 0, 0, 0, loc),
 	}
 	// Two manual generations for the same window both succeed (no dedup).
-	r1, err := uc.GenerateNow(context.Background(), 42, model.KindWeekly, "Asia/Shanghai", "{}", p)
+	r1, err := uc.GenerateNow(context.Background(), 42, model.KindWeekly, "Asia/Shanghai", "{}", "zh", p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r2, err := uc.GenerateNow(context.Background(), 42, model.KindWeekly, "Asia/Shanghai", "{}", p)
+	r2, err := uc.GenerateNow(context.Background(), 42, model.KindWeekly, "Asia/Shanghai", "{}", "zh", p)
 	if err != nil {
 		t.Fatal(err)
 	}

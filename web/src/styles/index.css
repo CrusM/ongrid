@@ -498,3 +498,71 @@ html.light .react-flow__minimap-mask {
   stroke: rgb(71, 85, 105); /* slate-600 outline */
   stroke-width: 1;
 }
+
+/* --- Report PDF export (HLD-014). window.print() isolates the report
+   body into a clean LIGHT document (white page, dark ink) that KEEPS the
+   accent colours — the toned numbers / dots / bars are re-mapped to
+   darker shades so they read on white. --- */
+@media print {
+  /* Hide everything, then reveal only the report content. */
+  body * {
+    visibility: hidden;
+  }
+  .report-print-area,
+  .report-print-area * {
+    visibility: visible;
+  }
+  .report-print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: auto !important;
+    overflow: visible !important;
+  }
+  html,
+  body,
+  .report-print-area {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    background: #ffffff !important;
+  }
+  /* Light theme: white surfaces, dark ink, light borders. The blanket
+     resets card fills + text to a printable baseline; the accent
+     overrides below win on specificity. */
+  .report-print-area * {
+    overflow: visible !important;
+    color: #18181b !important; /* zinc-900 ink */
+    background-color: transparent !important;
+    border-color: #e4e4e7 !important; /* zinc-200 */
+  }
+  .report-print-area .text-zinc-500,
+  .report-print-area .text-zinc-600 {
+    color: #71717a !important; /* keep secondary text grey, not black */
+  }
+  /* Accent numbers — darker shades for contrast on white. */
+  .report-print-area .text-indigo-400 { color: #4f46e5 !important; }
+  .report-print-area .text-rose-400 { color: #e11d48 !important; }
+  .report-print-area .text-violet-400 { color: #7c3aed !important; }
+  .report-print-area .text-cyan-400 { color: #0891b2 !important; }
+  .report-print-area .text-indigo-300 { color: #4f46e5 !important; }
+  /* Accent dots / utilisation bars / severity dots keep their fill. */
+  .report-print-area .bg-indigo-400 { background-color: #6366f1 !important; }
+  .report-print-area .bg-rose-400 { background-color: #f43f5e !important; }
+  .report-print-area .bg-violet-400 { background-color: #8b5cf6 !important; }
+  .report-print-area .bg-cyan-400 { background-color: #06b6d4 !important; }
+  .report-print-area .bg-red-400, .report-print-area .bg-red-500 { background-color: #ef4444 !important; }
+  .report-print-area .bg-amber-400, .report-print-area .bg-amber-500 { background-color: #f59e0b !important; }
+  .report-print-area .bg-sky-500 { background-color: #0ea5e9 !important; }
+  /* The thin progress-bar track stays a light grey so the fill shows. */
+  .report-print-area .bg-zinc-800 { background-color: #e4e4e7 !important; }
+  /* Keep a stat row / card from splitting across a page break. */
+  .report-print-area section,
+  .report-print-area .rounded-xl,
+  .report-print-area .rounded-lg {
+    break-inside: avoid;
+  }
+  @page {
+    margin: 12mm;
+  }
+}

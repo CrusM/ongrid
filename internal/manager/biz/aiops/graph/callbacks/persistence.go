@@ -25,6 +25,7 @@ import (
 	"github.com/cloudwego/eino/components"
 	einomodel "github.com/cloudwego/eino/components/model"
 	einotool "github.com/cloudwego/eino/components/tool"
+	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -283,11 +284,20 @@ func (h *PersistenceHandler) OnStart(ctx context.Context, info *callbacks.RunInf
 	if messageID == "" {
 		messageID = h.currentAssistantID()
 	}
-	llmCallID := ""
-	if v := ctxToolCallID(ctx); v != "" && v != fallbackToolCallID(info) {
-		llmCallID = v
-	} else {
-		llmCallID = h.popPendingLLMCall(info.Name)
+	// ROOT FIX: eino's ToolsNode stamps the authoritative LLM call id
+	// (call_XX) onto ctx before each tool runs — compose.GetToolCallID.
+	// Read it directly. It's exact and order-independent, so we never
+	// reconstruct the id from completion order (which mis-pairs under
+	// parallel out-of-order completion and was the source of the
+	// synthetic-id orphans → provider 400). The ctx seam + FIFO are kept
+	// only as defensive fallbacks for tools invoked outside a ToolsNode.
+	llmCallID := compose.GetToolCallID(ctx)
+	if llmCallID == "" {
+		if v := ctxToolCallID(ctx); v != "" && v != fallbackToolCallID(info) {
+			llmCallID = v
+		} else {
+			llmCallID = h.popPendingLLMCall(info.Name)
+		}
 	}
 	row := &model.ToolCall{
 		MessageID:     messageID,
@@ -610,19 +620,30 @@ func (h *PersistenceHandler) popPendingLLMCall(toolName string) string {
 	if len(h.pendingLLMCalls) == 0 {
 		return ""
 	}
-	head := h.pendingLLMCalls[0]
-	if head.toolName != toolName {
-		// Mismatch — surface so the wiring change is caught in dev.
-		// Do not consume the head; the tool row will fall back to
-		// the synthetic id and replay will drop this turn safely.
-		h.recordErr("tool_call_fifo_mismatch", errToolFIFOMismatch{
-			expected: head.toolName,
-			got:      toolName,
-		})
-		return ""
+	// Match by tool name ANYWHERE in the queue, not just the head.
+	// Parallel tool calls complete out of issue-order (e.g. query_promql
+	// finishes before get_host_processes even though it was listed
+	// second), so a strict head match mis-pairs and the row falls back to
+	// a synthetic "<name>|einoToolAdapter" id — which has no matching
+	// tool_calls on the assistant turn, so replay hits the provider's
+	// 400 "tool must follow tool_calls". Pop the first pending entry with
+	// this name; duplicate names still pair in issue order (FIFO among
+	// same-named peers).
+	for i, c := range h.pendingLLMCalls {
+		if c.toolName == toolName {
+			id := c.llmCallID
+			h.pendingLLMCalls = append(h.pendingLLMCalls[:i:i], h.pendingLLMCalls[i+1:]...)
+			return id
+		}
 	}
-	h.pendingLLMCalls = h.pendingLLMCalls[1:]
-	return head.llmCallID
+	// Genuinely no pending call for this tool — a real wiring drift.
+	// Surface it; the row falls back to the synthetic id and the replay
+	// builder drops the orphan tool message so the turn stays valid.
+	h.recordErr("tool_call_fifo_mismatch", errToolFIFOMismatch{
+		expected: h.pendingLLMCalls[0].toolName,
+		got:      toolName,
+	})
+	return ""
 }
 
 func (h *PersistenceHandler) currentAssistantID() string {
@@ -840,6 +861,15 @@ func WithToolCallID(ctx context.Context, id string) context.Context {
 // but inspecting it via Type+Name keeps us decoupled from internal
 // pointer identity.
 func toolCallIDFromCtx(ctx context.Context, info *callbacks.RunInfo) string {
+	// ROOT FIX: prefer eino's authoritative tool_call_id. The ToolsNode
+	// sets it per call (compose.GetToolCallID), so OnStart/OnEnd of one
+	// tool share the real call_XX and the h.toolCalls map pairs exactly —
+	// even when parallel tools finish out of order. This is also what the
+	// role=tool chat_messages row carries, so replay never sees a
+	// synthetic-id orphan.
+	if rid := compose.GetToolCallID(ctx); rid != "" {
+		return rid
+	}
 	if v, ok := ctx.Value(toolCallIDCtxKey{}).(string); ok && v != "" {
 		return v
 	}

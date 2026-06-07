@@ -924,27 +924,19 @@ func buildEinoHistory(rows []*aiopsmodel.Message) []*schema.Message {
 				emitToolByCallID(tc.ID)
 			}
 		case aiopsmodel.RoleTool:
-			if skipTool[i] {
-				continue
-			}
-			content := ""
-			if m.Content != nil {
-				content = *m.Content
-			}
-			tcID := ""
-			if m.ToolCallID != nil {
-				tcID = *m.ToolCallID
-			}
-			tname := ""
-			if m.ToolName != nil {
-				tname = *m.ToolName
-			}
-			out = append(out, &schema.Message{
-				Role:       schema.RoleType(m.Role),
-				Content:    content,
-				ToolCallID: tcID,
-				ToolName:   tname,
-			})
+			// Tool messages are emitted ONLY via hoisting (emitToolByCallID,
+			// right after their assistant's tool_calls — which sets
+			// skipTool for that row). A role=tool row reaching this branch
+			// un-hoisted is an ORPHAN: its tool_call_id matches no preceding
+			// assistant tool_call. That happens when an out-of-order
+			// parallel completion persisted the response under a synthetic
+			// "<name>|einoToolAdapter" id (the autoheal stub then filled the
+			// real id slot, so the assistant turn survived the precheck and
+			// this real response is left dangling). Emitting it bare yields
+			// the provider 400 "Messages with role 'tool' must be a response
+			// to a preceding message with 'tool_calls'". Drop it — the
+			// assistant's slot is already satisfied by the hoisted row.
+			continue
 		}
 	}
 	return out
