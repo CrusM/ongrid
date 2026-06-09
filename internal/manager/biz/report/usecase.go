@@ -10,6 +10,7 @@ package report
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	model "github.com/ongridio/ongrid/internal/manager/model/report"
@@ -49,12 +50,34 @@ type Generator interface {
 	Generate(ctx context.Context, reportID string)
 }
 
+type readyChecker interface {
+	Ready(ctx context.Context) error
+}
+
 // nopGenerator leaves the report in pending — used until PR-2 wires the
 // real worker. Surfaced explicitly (not nil) so callers don't have to
 // nil-check on every fire.
 type nopGenerator struct{}
 
 func (nopGenerator) Generate(context.Context, string) {}
+
+type unavailableGenerator struct {
+	err error
+}
+
+// NewUnavailableGenerator returns a Generator that keeps report routes
+// mounted while generation is unavailable, for example when no LLM
+// provider is configured at startup.
+func NewUnavailableGenerator(reason string) Generator {
+	if reason == "" {
+		reason = "report generator unavailable"
+	}
+	return unavailableGenerator{err: fmt.Errorf("%w: %s", errs.ErrNotWiredYet, reason)}
+}
+
+func (g unavailableGenerator) Generate(context.Context, string) {}
+
+func (g unavailableGenerator) Ready(context.Context) error { return g.err }
 
 // Usecase is the report business logic.
 type Usecase struct {
@@ -142,6 +165,9 @@ func (u *Usecase) CreateSchedule(ctx context.Context, s *model.ReportSchedule, n
 // nextFireAt is computed by the caller (it owns the cron parser); we
 // take it as an argument so this layer stays free of the cron lib.
 func (u *Usecase) FireSchedule(ctx context.Context, s *model.ReportSchedule, fireAt, nextFireAt time.Time) (*model.Report, error) {
+	if err := u.ensureGeneratorReady(ctx); err != nil {
+		return nil, err
+	}
 	loc, err := loadLocation(s.Timezone)
 	if err != nil {
 		return nil, err
@@ -193,6 +219,9 @@ func (u *Usecase) GenerateNow(ctx context.Context, createdBy uint64, kind, tz, s
 	if _, err := loadLocation(tz); err != nil {
 		return nil, err
 	}
+	if err := u.ensureGeneratorReady(ctx); err != nil {
+		return nil, err
+	}
 	if locale == "" {
 		locale = u.defaultLocale
 	}
@@ -210,7 +239,7 @@ func (u *Usecase) GenerateNow(ctx context.Context, createdBy uint64, kind, tz, s
 		ErrorMsg:    "",
 		ContentJSON: "",
 		ContentMD:   "",
-		ScopeJSON: scopeJSON,
+		ScopeJSON:   scopeJSON,
 	}
 	if err := u.repo.CreateReport(ctx, rpt); err != nil {
 		return nil, err
@@ -223,21 +252,28 @@ func (u *Usecase) GenerateNow(ctx context.Context, createdBy uint64, kind, tz, s
 func (u *Usecase) buildPendingReport(s *model.ReportSchedule, p Period) *model.Report {
 	id := s.ID
 	return &model.Report{
-		ID:            u.idGen(),
-		ScheduleID:    &id,
-		CreatedBy:     s.CreatedBy,
-		Title:         TitleFor(s.Kind, p, u.defaultLocale),
-		Kind:          s.Kind,
-		PeriodStart:   p.Start,
-		PeriodEnd:     p.End,
-		Timezone:      s.Timezone,
-		Locale:        u.defaultLocale,
-		Status:        model.StatusPending,
-		ErrorMsg:      "",
-		ContentJSON:   "",
-		ContentMD:     "",
-		ScopeJSON: s.ScopeJSON,
+		ID:          u.idGen(),
+		ScheduleID:  &id,
+		CreatedBy:   s.CreatedBy,
+		Title:       TitleFor(s.Kind, p, u.defaultLocale),
+		Kind:        s.Kind,
+		PeriodStart: p.Start,
+		PeriodEnd:   p.End,
+		Timezone:    s.Timezone,
+		Locale:      u.defaultLocale,
+		Status:      model.StatusPending,
+		ErrorMsg:    "",
+		ContentJSON: "",
+		ContentMD:   "",
+		ScopeJSON:   s.ScopeJSON,
 	}
+}
+
+func (u *Usecase) ensureGeneratorReady(ctx context.Context) error {
+	if g, ok := u.gen.(readyChecker); ok {
+		return g.Ready(ctx)
+	}
+	return nil
 }
 
 // loadLocation resolves a schedule timezone, defaulting to UTC on empty.

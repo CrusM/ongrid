@@ -51,6 +51,7 @@ type workerGenerator struct {
 	facts     FactsCollector
 	spawner   WorkerSpawner
 	deliverer Deliverer // nil = in-app only
+	ready     func(context.Context) error
 	cfg       GeneratorConfig
 	log       *slog.Logger
 }
@@ -82,6 +83,20 @@ func NewWorkerGenerator(repo Repo, facts FactsCollector, spawner WorkerSpawner, 
 func (g *workerGenerator) WithDeliverer(d Deliverer) *workerGenerator {
 	g.deliverer = d
 	return g
+}
+
+// WithReadyCheck attaches a lightweight preflight used by manual and
+// scheduled triggers before creating a pending report row.
+func (g *workerGenerator) WithReadyCheck(fn func(context.Context) error) *workerGenerator {
+	g.ready = fn
+	return g
+}
+
+func (g *workerGenerator) Ready(ctx context.Context) error {
+	if g.ready == nil {
+		return nil
+	}
+	return g.ready(ctx)
 }
 
 // Generate runs the full pipeline for one report id. Always reaches a

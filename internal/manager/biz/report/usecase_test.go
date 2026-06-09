@@ -2,6 +2,7 @@ package report
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"sync"
 	"testing"
@@ -242,6 +243,27 @@ func TestGenerateNow_NoScheduleNoDedup(t *testing.T) {
 	}
 	if len(repo.reports) != 2 {
 		t.Errorf("expected 2 manual reports, got %d", len(repo.reports))
+	}
+}
+
+func TestGenerateNow_GeneratorUnavailableDoesNotCreateReport(t *testing.T) {
+	repo := newFakeRepo()
+	uc := NewUsecase(repo, NewUnavailableGenerator("LLM provider not configured"), seqIDGen())
+	loc := mustLoc(t, "Asia/Shanghai")
+	p := Period{
+		Start: time.Date(2026, 6, 1, 0, 0, 0, 0, loc),
+		End:   time.Date(2026, 6, 8, 0, 0, 0, 0, loc),
+	}
+
+	rpt, err := uc.GenerateNow(context.Background(), 42, model.KindWeekly, "Asia/Shanghai", "{}", "zh", p)
+	if !errors.Is(err, errs.ErrNotWiredYet) {
+		t.Fatalf("GenerateNow err = %v, want ErrNotWiredYet", err)
+	}
+	if rpt != nil {
+		t.Fatalf("GenerateNow report = %+v, want nil", rpt)
+	}
+	if len(repo.reports) != 0 {
+		t.Fatalf("unavailable generator should not create report rows, got %d", len(repo.reports))
 	}
 }
 

@@ -6,6 +6,7 @@ import { relativeTime } from '@/lib/format';
 import { usePoll } from '@/lib/usePoll';
 import { usePermissions } from '@/store/me';
 import { useI18n } from '@/i18n/locale';
+import { ApiError } from '@/api/client';
 import { generateNow, listReports, type ReportListItem, type ReportStatus } from '@/api/reports';
 
 const POLL_MS = 20_000;
@@ -56,6 +57,7 @@ export default function ReportsPage() {
   const [statusFilter, setStatusFilter] = useState('');
   const [kindFilter, setKindFilter] = useState('');
   const [page, setPage] = useState(0);
+  const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -83,14 +85,17 @@ export default function ReportsPage() {
 
   const onGenerate = useCallback(async () => {
     setGenerating(true);
+    setErr(null);
     try {
       const rpt = await generateNow({ kind: 'weekly' });
       await load();
       navigate(`/reports/${rpt.id}`);
+    } catch (e) {
+      setErr(reportActionError(e, tr));
     } finally {
       setGenerating(false);
     }
-  }, [load, navigate]);
+  }, [load, navigate, tr]);
 
   return (
     <main className="anim-fade flex flex-1 flex-col overflow-hidden">
@@ -129,6 +134,14 @@ export default function ReportsPage() {
       </div>
 
       <div className="flex flex-1 flex-col overflow-y-auto px-6 py-5">
+        {err && (
+          <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+            <span>{err}</span>
+            <Link to="/settings/llm" className="shrink-0 font-medium text-amber-700 hover:text-amber-900 dark:text-amber-200 dark:hover:text-amber-100">
+              {tr('去配置', 'Configure')}
+            </Link>
+          </div>
+        )}
         <div className="overflow-hidden rounded-xl border border-zinc-800/60 bg-zinc-900/40">
           <table className="w-full table-fixed text-sm">
             <colgroup>
@@ -229,6 +242,14 @@ export default function ReportsPage() {
       </div>
     </main>
   );
+}
+
+function reportActionError(e: unknown, tr: (zh: string, en: string) => string): string {
+  if (e instanceof ApiError && e.code === 'not-wired-yet') {
+    return tr('当前未配置 LLM provider，请先配置模型后再生成报告。', 'No LLM provider is configured. Configure a model before generating reports.');
+  }
+  if (e instanceof ApiError) return e.message;
+  return (e as Error)?.message || tr('生成失败', 'Generation failed');
 }
 
 function FilterGroup({

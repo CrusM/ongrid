@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -37,6 +38,7 @@ import (
 	"github.com/ongridio/ongrid/internal/pkg/authzmw"
 	"github.com/ongridio/ongrid/internal/pkg/config"
 	"github.com/ongridio/ongrid/internal/pkg/dbx"
+	"github.com/ongridio/ongrid/internal/pkg/errs"
 	"github.com/ongridio/ongrid/internal/pkg/httpserver"
 	"github.com/ongridio/ongrid/internal/pkg/llm"
 	"github.com/ongridio/ongrid/internal/pkg/logger"
@@ -1543,14 +1545,13 @@ func main() {
 	}
 
 	// Report scheduler + API (HLD-014): scheduled operational reports.
-	// Wired only when the chat runtime is the graph kernel — the reporter
-	// worker spawns through the same SpawnWorker seam the investigator
-	// uses. New tables / new goroutine / new routes; no impact on
-	// existing startup. reportHandler stays nil when not wired so the
-	// route-mount block below skips it.
-	var reportHandler *managerserverreport.Handler
+	// Routes are mounted even when the LLM runtime is unavailable, so the
+	// UI can list existing reports and surface a clear not-configured
+	// error on generate instead of a route-level 404.
+	reportRepo := managerreportdata.NewRepo(db)
+	var reportGen managerbizreport.Generator
+	reportSchedulerReady := false
 	if reportRT, ok := aiopsRuntime.(*aiopschatruntime.Runtime); ok && reportRT != nil {
-		reportRepo := managerreportdata.NewRepo(db)
 		// Pass the prom query client for fleet resource trends; a typed-nil
 		// guard mirrors the tools wiring so a missing client stays a clean
 		// untyped nil (collector degrades Resource.Available=false).
@@ -1558,7 +1559,7 @@ func main() {
 		if promQueryClient != nil {
 			reportProm = promQueryClient
 		}
-		reportGen := managerbizreport.NewWorkerGenerator(
+		reportGen = managerbizreport.NewWorkerGenerator(
 			reportRepo,
 			managerreportdata.NewFactsCollector(db, reportProm),
 			reportRT,
@@ -1567,16 +1568,23 @@ func main() {
 				PublicURL:     cfg.PublicURL,
 			},
 			log,
-		).WithDeliverer(reportDelivererShim{channels: alertRepo, router: notifyRouter})
-		reportUC := managerbizreport.NewUsecase(reportRepo, reportGen, uuid.NewString).
-			WithReadRepo(reportRepo).
-			WithDefaultLocale(firstNonEmpty(os.Getenv("ONGRID_DEFAULT_LOCALE"), "en"))
-		managerbizreport.NewScheduler(reportUC, log).Start(rootCtx)
-		reportHandler = managerserverreport.NewHandler(reportUC)
-		log.Info("report: scheduler + API wired")
+		).
+			WithDeliverer(reportDelivererShim{channels: alertRepo, router: notifyRouter}).
+			WithReadyCheck(reportLLMReady(llmSettingsResolver))
+		reportSchedulerReady = true
+		log.Info("report: generator wired")
 	} else {
-		log.Info("report: not wired (chat runtime is not the graph kernel)")
+		reportGen = managerbizreport.NewUnavailableGenerator("LLM provider not configured")
+		log.Info("report: API wired without generator", slog.String("reason", "LLM provider not configured"))
 	}
+	reportUC := managerbizreport.NewUsecase(reportRepo, reportGen, uuid.NewString).
+		WithReadRepo(reportRepo).
+		WithDefaultLocale(firstNonEmpty(os.Getenv("ONGRID_DEFAULT_LOCALE"), "en"))
+	if reportSchedulerReady {
+		managerbizreport.NewScheduler(reportUC, log).Start(rootCtx)
+		log.Info("report: scheduler wired")
+	}
+	reportHandler := managerserverreport.NewHandler(reportUC)
 
 	// Boot compensation pass for the structured RCA path: incidents that
 	// fired while no LLM provider was configured had their auto-investigation
@@ -1878,18 +1886,14 @@ func main() {
 			marketplaceHandler.Register(protected)
 			promProxyHandler.RegisterProtected(protected)
 			managerserveraudit.NewHandler(auditUC).Register(protected)
-			if reportHandler != nil {
-				reportHandler.Register(protected)
-			}
+			reportHandler.Register(protected)
 		})
 	})
 
 	// Public (unauthenticated) report share route: /r/{token}. Mounted
 	// on the root mux outside the auth group so a shared report opens
 	// without a login (30-day TTL enforced in the biz layer).
-	if reportHandler != nil {
-		reportHandler.RegisterPublic(mux)
-	}
+	reportHandler.RegisterPublic(mux)
 
 	apiServer := httpserver.New(cfg.HTTPAddr, mux, log.With(slog.String("listener", "api")))
 
@@ -2199,6 +2203,61 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+func knownLLMProviderIDs() []string {
+	return []string{
+		llm.ProviderOpenAI,
+		llm.ProviderAnthropic,
+		llm.ProviderZhipu,
+		llm.ProviderGemini,
+		llm.ProviderDeepSeek,
+		llm.ProviderKimi,
+		llm.ProviderCustom,
+	}
+}
+
+func reportLLMReady(resolver *managerbizsetting.LLMSettingsResolver) func(context.Context) error {
+	return func(ctx context.Context) error {
+		if resolver == nil {
+			return fmt.Errorf("%w: LLM provider not configured", errs.ErrNotWiredYet)
+		}
+		providers, resolvedDefault, err := resolver.ResolveProviders(ctx)
+		if err != nil {
+			return fmt.Errorf("resolve LLM providers: %w", err)
+		}
+		if id, _ := pickProviderDefault(providers, resolvedDefault); id != "" {
+			return nil
+		}
+		return fmt.Errorf("%w: LLM provider not configured", errs.ErrNotWiredYet)
+	}
+}
+
+// pickProviderDefault mirrors llm.MultiClient's catalog default:
+// use the configured default when it names an available provider, otherwise
+// pick the first configured provider by stable provider id. Background graph
+// workers, including reports, rely on this to match /v1/aiops/models.
+func pickProviderDefault(providers []llm.ProviderConfig, preferred string) (string, string) {
+	preferred = strings.TrimSpace(preferred)
+	available := make([]llm.ProviderConfig, 0, len(providers))
+	for _, p := range providers {
+		if strings.TrimSpace(p.ID) == "" || strings.TrimSpace(p.APIKey) == "" {
+			continue
+		}
+		available = append(available, p)
+	}
+	if preferred != "" {
+		for _, p := range available {
+			if p.ID == preferred {
+				return p.ID, p.Model
+			}
+		}
+	}
+	sort.Slice(available, func(i, j int) bool { return available[i].ID < available[j].ID })
+	if len(available) > 0 {
+		return available[0].ID, available[0].Model
+	}
+	return "", ""
 }
 
 // dedupeModels returns vals with empty strings dropped and duplicates
@@ -2569,8 +2628,8 @@ func buildAIOpsRuntime(
 			for _, pc := range provCfgs {
 				addInner(pc.ID, pc.Model)
 			}
-			if resolvedDefault != "" {
-				defProv = resolvedDefault
+			if id, _ := pickProviderDefault(provCfgs, resolvedDefault); id != "" {
+				defProv = id
 			}
 		} else {
 			log.Warn("chatruntime: resolve providers for inner models", slog.Any("err", rerr))
@@ -2592,9 +2651,6 @@ func buildAIOpsRuntime(
 			addInner(llm.ProviderGemini, firstNonEmpty(cfg.LLM.Gemini.Model, "gemini-2.5-pro"))
 		}
 	}
-	if len(innerModels) == 0 {
-		return nil, fmt.Errorf("chatruntime: no LLM provider configured")
-	}
 	// Pre-register an inner for every known provider id (incl. the generic
 	// "custom" endpoint) even if unconfigured at boot, so a provider whose key
 	// is added via the UI AFTER boot routes immediately — no restart. Only the
@@ -2602,13 +2658,13 @@ func buildAIOpsRuntime(
 	// dynamically by llmClient. Unconfigured providers never reach the picker
 	// (the /v1/aiops/models catalog gates on ResolveProviders), so they're
 	// never selected; a stray call to one fails cleanly at key resolution.
-	for _, id := range []string{
-		llm.ProviderOpenAI, llm.ProviderAnthropic, llm.ProviderZhipu,
-		llm.ProviderGemini, llm.ProviderDeepSeek, llm.ProviderKimi, llm.ProviderCustom,
-	} {
+	for _, id := range knownLLMProviderIDs() {
 		if _, ok := innerModels[id]; !ok {
 			addInner(id, "") // model supplied per-call (picker / DefaultResolver)
 		}
+	}
+	if len(innerModels) == 0 {
+		return nil, fmt.Errorf("chatruntime: no LLM provider configured")
 	}
 	if defProv == "" {
 		defProv = llm.ProviderOpenAI
@@ -2633,15 +2689,10 @@ func buildAIOpsRuntime(
 	if resolver != nil {
 		defaultResolver = func(rctx context.Context) (string, string) {
 			provCfgs, resolvedDefault, rerr := resolver.ResolveProviders(rctx)
-			if rerr != nil || resolvedDefault == "" {
+			if rerr != nil {
 				return "", ""
 			}
-			for _, pc := range provCfgs {
-				if pc.ID == resolvedDefault {
-					return resolvedDefault, pc.Model
-				}
-			}
-			return resolvedDefault, ""
+			return pickProviderDefault(provCfgs, resolvedDefault)
 		}
 	}
 	chatModel, err := llm.NewRoutingChatModel(llm.RoutingChatModelConfig{

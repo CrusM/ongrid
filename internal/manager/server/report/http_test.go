@@ -21,6 +21,10 @@ import (
 )
 
 func newTestHandler(t *testing.T) (*Handler, *gorm.DB) {
+	return newTestHandlerWithGenerator(t, nil)
+}
+
+func newTestHandlerWithGenerator(t *testing.T, gen bizreport.Generator) (*Handler, *gorm.DB) {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
@@ -32,7 +36,7 @@ func newTestHandler(t *testing.T) (*Handler, *gorm.DB) {
 		t.Fatalf("migrate: %v", err)
 	}
 	repo := reportstore.NewRepo(db)
-	uc := bizreport.NewUsecase(repo, nil, func() string { return "rpt-" + time.Now().Format("150405.000000000") }).
+	uc := bizreport.NewUsecase(repo, gen, func() string { return "rpt-" + time.Now().Format("150405.000000000") }).
 		WithReadRepo(repo)
 	return NewHandler(uc), db
 }
@@ -127,6 +131,24 @@ func TestGenerateNow_AsUser_Accepted(t *testing.T) {
 	}
 }
 
+func TestGenerateNow_WhenLLMProviderMissing_ReturnsNotWired(t *testing.T) {
+	h, _ := newTestHandlerWithGenerator(t, bizreport.NewUnavailableGenerator("LLM provider not configured"))
+	w := serve(h, req("POST", "/v1/reports", `{"kind":"weekly","timezone":"UTC"}`, "user"))
+	if w.Code != http.StatusNotImplemented {
+		t.Fatalf("generate status = %d, body=%s", w.Code, w.Body.String())
+	}
+	var body errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Code != "not-wired-yet" {
+		t.Fatalf("error code = %q, want not-wired-yet", body.Code)
+	}
+	if !strings.Contains(body.Error, "LLM provider not configured") {
+		t.Fatalf("error body = %q, want LLM provider hint", body.Error)
+	}
+}
+
 func TestShareAndPublicRead(t *testing.T) {
 	h, _ := newTestHandler(t)
 	// Create a manual report.
@@ -163,4 +185,3 @@ func TestUnauthenticated401(t *testing.T) {
 		t.Errorf("unauthenticated status = %d, want 401", w.Code)
 	}
 }
-

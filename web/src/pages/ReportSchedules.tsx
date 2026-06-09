@@ -6,6 +6,7 @@ import { cn } from '@/lib/cn';
 import { fullDateTime } from '@/lib/format';
 import { usePermissions } from '@/store/me';
 import { useI18n } from '@/i18n/locale';
+import { ApiError } from '@/api/client';
 import { listChannels, type Channel } from '@/api/alerts';
 import {
   createSchedule,
@@ -37,6 +38,7 @@ export default function ReportSchedulesPage() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<ReportSchedule | null>(null);
   const [creating, setCreating] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -68,9 +70,14 @@ export default function ReportSchedulesPage() {
     [load, tr],
   );
   const onRunNow = useCallback(async (s: ReportSchedule) => {
-    await runScheduleNow(s.id);
-    window.location.href = '/reports';
-  }, []);
+    setErr(null);
+    try {
+      await runScheduleNow(s.id);
+      window.location.href = '/reports';
+    } catch (e) {
+      setErr(reportActionError(e, tr));
+    }
+  }, [tr]);
 
   return (
     <main className="anim-fade flex flex-1 flex-col overflow-hidden">
@@ -98,77 +105,93 @@ export default function ReportSchedulesPage() {
       </header>
 
       <div className="flex-1 overflow-y-auto px-6 py-5">
-      {loading ? (
-        <div className="py-16 text-center text-sm text-zinc-500">{tr('加载中…', 'Loading…')}</div>
-      ) : items.length === 0 ? (
-        <div className="mx-auto max-w-2xl rounded-lg border border-dashed border-zinc-800 py-16 text-center text-sm text-zinc-400">
-          {tr('还没有定时任务。新建一个日报/周报定时生成。', 'No schedules yet. Create a daily/weekly scheduled report.')}
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-          {items.map((s) => (
-            <div key={s.id} className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3.5">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-zinc-100">{s.name || tr('(未命名)', '(unnamed)')}</span>
-                  <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[11px] text-zinc-400">
-                    {KINDS.find((k) => k.key === s.kind)?.[tr('zh', 'en') as 'zh' | 'en'] ?? s.kind}
-                  </span>
-                  {!s.enabled && (
-                    <span className="rounded bg-zinc-700/40 px-1.5 py-0.5 text-[11px] text-zinc-500">
-                      {tr('已停用', 'Disabled')}
+        {err && (
+          <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+            <span>{err}</span>
+            <Link to="/settings/llm" className="shrink-0 font-medium text-amber-700 hover:text-amber-900 dark:text-amber-200 dark:hover:text-amber-100">
+              {tr('去配置', 'Configure')}
+            </Link>
+          </div>
+        )}
+        {loading ? (
+          <div className="py-16 text-center text-sm text-zinc-500">{tr('加载中…', 'Loading…')}</div>
+        ) : items.length === 0 ? (
+          <div className="mx-auto max-w-2xl rounded-lg border border-dashed border-zinc-800 py-16 text-center text-sm text-zinc-400">
+            {tr('还没有定时任务。新建一个日报/周报定时生成。', 'No schedules yet. Create a daily/weekly scheduled report.')}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+            {items.map((s) => (
+              <div key={s.id} className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-zinc-100">{s.name || tr('(未命名)', '(unnamed)')}</span>
+                    <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[11px] text-zinc-400">
+                      {KINDS.find((k) => k.key === s.kind)?.[tr('zh', 'en') as 'zh' | 'en'] ?? s.kind}
                     </span>
+                    {!s.enabled && (
+                      <span className="rounded bg-zinc-700/40 px-1.5 py-0.5 text-[11px] text-zinc-500">
+                        {tr('已停用', 'Disabled')}
+                      </span>
+                    )}
+                  </div>
+                  {canMutate && (
+                    <div className="flex items-center gap-1">
+                      <IconBtn title={tr('立即生成', 'Run now')} onClick={() => void onRunNow(s)}>
+                        <Play size={13} />
+                      </IconBtn>
+                      <IconBtn title={tr('编辑', 'Edit')} onClick={() => setEditing(s)}>
+                        <Pencil size={13} />
+                      </IconBtn>
+                      <IconBtn title={s.enabled ? tr('停用', 'Disable') : tr('启用', 'Enable')} onClick={() => void onToggle(s)}>
+                        <Power size={13} className={s.enabled ? 'text-emerald-400' : 'text-zinc-500'} />
+                      </IconBtn>
+                      <IconBtn title={tr('删除', 'Delete')} onClick={() => void onDelete(s)} danger>
+                        <Trash2 size={13} />
+                      </IconBtn>
+                    </div>
                   )}
                 </div>
-                {canMutate && (
-                  <div className="flex items-center gap-1">
-                    <IconBtn title={tr('立即生成', 'Run now')} onClick={() => void onRunNow(s)}>
-                      <Play size={13} />
-                    </IconBtn>
-                    <IconBtn title={tr('编辑', 'Edit')} onClick={() => setEditing(s)}>
-                      <Pencil size={13} />
-                    </IconBtn>
-                    <IconBtn title={s.enabled ? tr('停用', 'Disable') : tr('启用', 'Enable')} onClick={() => void onToggle(s)}>
-                      <Power size={13} className={s.enabled ? 'text-emerald-400' : 'text-zinc-500'} />
-                    </IconBtn>
-                    <IconBtn title={tr('删除', 'Delete')} onClick={() => void onDelete(s)} danger>
-                      <Trash2 size={13} />
-                    </IconBtn>
+                <div className="mt-1 font-mono text-xs text-zinc-500">
+                  {s.cron_spec} · {s.timezone}
+                </div>
+                {s.next_fire_at && (
+                  <div className="mt-0.5 text-xs text-zinc-600">
+                    {tr('下次：', 'Next: ')}
+                    {fullDateTime(s.next_fire_at)}
                   </div>
                 )}
               </div>
-              <div className="mt-1 font-mono text-xs text-zinc-500">
-                {s.cron_spec} · {s.timezone}
-              </div>
-              {s.next_fire_at && (
-                <div className="mt-0.5 text-xs text-zinc-600">
-                  {tr('下次：', 'Next: ')}
-                  {fullDateTime(s.next_fire_at)}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        )}
 
-      {(creating || editing) && (
-        <ScheduleForm
-          channels={channels}
-          initial={editing}
-          onClose={() => {
-            setCreating(false);
-            setEditing(null);
-          }}
-          onSaved={() => {
-            setCreating(false);
-            setEditing(null);
-            void load();
-          }}
-        />
-      )}
+        {(creating || editing) && (
+          <ScheduleForm
+            channels={channels}
+            initial={editing}
+            onClose={() => {
+              setCreating(false);
+              setEditing(null);
+            }}
+            onSaved={() => {
+              setCreating(false);
+              setEditing(null);
+              void load();
+            }}
+          />
+        )}
       </div>
     </main>
   );
+}
+
+function reportActionError(e: unknown, tr: (zh: string, en: string) => string): string {
+  if (e instanceof ApiError && e.code === 'not-wired-yet') {
+    return tr('当前未配置 LLM provider，请先配置模型后再生成报告。', 'No LLM provider is configured. Configure a model before generating reports.');
+  }
+  if (e instanceof ApiError) return e.message;
+  return (e as Error)?.message || tr('生成失败', 'Generation failed');
 }
 
 function IconBtn({

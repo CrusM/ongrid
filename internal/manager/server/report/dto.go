@@ -244,6 +244,8 @@ func errCode(err error) string {
 		return "forbidden"
 	case errors.Is(err, errs.ErrInvalid):
 		return "invalid"
+	case errors.Is(err, errs.ErrNotWiredYet):
+		return "not-wired-yet"
 	default:
 		return "internal"
 	}
