@@ -1799,6 +1799,39 @@ const DB_LISTEN_DEFAULT: Record<string, string> = {
   mongodb: '127.0.0.1:19216',
 };
 
+const DB_TYPE_OPTIONS = [
+  { id: 'mysql', label: 'MySQL', hintZh: '使用 my.cnf secret 文件', hintEn: 'Uses a my.cnf secret file' },
+  { id: 'postgresql', label: 'PostgreSQL', hintZh: '使用 PostgreSQL DSN 文件', hintEn: 'Uses a PostgreSQL DSN file' },
+  { id: 'redis', label: 'Redis', hintZh: '使用 Redis URI 文件', hintEn: 'Uses a Redis URI file' },
+  { id: 'mongodb', label: 'MongoDB', hintZh: '使用 MongoDB URI 文件', hintEn: 'Uses a MongoDB URI file' },
+] as const;
+
+type DBType = (typeof DB_TYPE_OPTIONS)[number]['id'];
+
+function dbSecretPath(id: string, dbType: DBType) {
+  return dbType === 'mysql'
+    ? `/etc/ongrid-edge/secrets/${id}.my.cnf`
+    : `/etc/ongrid-edge/secrets/${id}.dsn`;
+}
+
+function buildDatabaseSourceTemplate(dbType: DBType, idx: number): Record<string, unknown> {
+  const id = `${dbType}-${idx + 1}`;
+  return {
+    id,
+    enabled: true,
+    db_type: dbType,
+    name: id,
+    listen_address: DB_LISTEN_DEFAULT[dbType],
+    connection: { type: 'file', path: dbSecretPath(id, dbType) },
+    scrape_interval: '30s',
+    scrape_timeout: '5s',
+    source_label: `db:${id}`,
+    extra_labels: { db_type: dbType, service: id },
+    sample_limit: 5000,
+    label_drop: ['query', 'statement', 'collection'],
+  };
+}
+
 function DatabaseMetricsSpecForm({
   draft,
   targetHealth,
@@ -1811,6 +1844,7 @@ function DatabaseMetricsSpecForm({
   const { tr } = useI18n();
   const sources = asObjectArray(draft.sources);
   const [openIndex, setOpenIndex] = useState<number | null>(null);
+  const [choosingType, setChoosingType] = useState(false);
   const healthMap = healthByID(targetHealth);
   const setSources = (next: Record<string, unknown>[]) =>
     onChange({ ...draft, sources: next });
@@ -1820,27 +1854,11 @@ function DatabaseMetricsSpecForm({
     setSources(sources.filter((_, i) => i !== idx));
     setOpenIndex(null);
   };
-  const addSource = () => {
-    const id = `mysql-${sources.length + 1}`;
+  const addSource = (dbType: DBType) => {
     const nextIndex = sources.length;
-    setSources([
-      ...sources,
-      {
-        id,
-        enabled: true,
-        db_type: 'mysql',
-        name: id,
-        listen_address: DB_LISTEN_DEFAULT.mysql,
-        connection: { type: 'file', path: `/etc/ongrid-edge/secrets/${id}.my.cnf` },
-        scrape_interval: '30s',
-        scrape_timeout: '5s',
-        source_label: `db:${id}`,
-        extra_labels: { db_type: 'mysql', service: id },
-        sample_limit: 5000,
-        label_drop: ['query', 'statement', 'collection'],
-      },
-    ]);
+    setSources([...sources, buildDatabaseSourceTemplate(dbType, nextIndex)]);
     setOpenIndex(nextIndex);
+    setChoosingType(false);
   };
   useEffect(() => {
     if (openIndex !== null && openIndex >= sources.length) {
@@ -1858,12 +1876,39 @@ function DatabaseMetricsSpecForm({
         </div>
         <button
           type="button"
-          onClick={addSource}
+          onClick={() => {
+            setChoosingType((v) => !v);
+            setOpenIndex(null);
+          }}
           className="inline-flex items-center gap-1 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-[11px] text-zinc-200 hover:bg-zinc-800"
         >
-          <Plus size={11} /> {tr('添加新配置', 'Add config')}
+          {choosingType ? <ChevronDown size={11} /> : <Plus size={11} />}
+          {choosingType ? tr('收起类型', 'Hide types') : tr('添加新配置', 'Add config')}
         </button>
       </div>
+      {choosingType && (
+        <div className="rounded-md border border-zinc-800 bg-zinc-950/40 p-3">
+          <div className="mb-2 text-[11px] font-medium text-zinc-300">
+            {tr('选择数据库类型后生成对应模板', 'Select a database type to create the matching template')}
+          </div>
+          <div className="grid gap-2 md:grid-cols-4">
+            {DB_TYPE_OPTIONS.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => addSource(option.id)}
+                className="rounded-md border border-zinc-800 bg-zinc-950 px-3 py-2 text-left hover:border-zinc-700 hover:bg-zinc-900"
+              >
+                <div className="font-mono text-[11px] text-zinc-100">{option.label}</div>
+                <div className="mt-1 text-[10px] text-zinc-500">{tr(option.hintZh, option.hintEn)}</div>
+                <div className="mt-1 font-mono text-[10px] text-zinc-500">
+                  {DB_LISTEN_DEFAULT[option.id]}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       {sources.length === 0 && (
         <div className="rounded-md border border-dashed border-zinc-800 px-3 py-3 text-[11px] text-zinc-500">
           {tr('用于需要 Ongrid 在 edge 上托管 exporter 的数据库。已有 /metrics 接口的数据库 exporter 请放到 custommetrics。', 'Use this when Ongrid should manage the exporter on the edge. Existing database /metrics exporters belong in custommetrics.')}
