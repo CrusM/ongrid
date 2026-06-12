@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -1346,7 +1347,7 @@ func (r databaseStatusRunner) analyzeMySQL(ctx context.Context, selector string,
 		MetricKey: "connection_usage_pct",
 		Code:      "mysql_connection_pressure",
 		Title:     "MySQL 连接使用率偏高",
-		Expr:      fmt.Sprintf("100 * max(mysql_global_status_threads_connected{%s}) / max(mysql_global_variables_max_connections{%s})", selector, selector),
+		Expr:      fmt.Sprintf("100 * max(mysql_global_status_threads_connected{%s}) / clamp_min(max(mysql_global_variables_max_connections{%s}), 1)", selector, selector),
 		Required:  []string{"mysql_global_status_threads_connected", "mysql_global_variables_max_connections"},
 		WarnAbove: floatPtr(75),
 		CritAbove: floatPtr(90),
@@ -1437,7 +1438,7 @@ func (r databaseStatusRunner) analyzeMySQL(ctx context.Context, selector string,
 		MetricKey: "open_files_usage_pct",
 		Code:      "mysql_open_files_pressure",
 		Title:     "MySQL open files 使用率偏高",
-		Expr:      fmt.Sprintf("100 * max(mysql_global_status_open_files{%s}) / max(mysql_global_variables_open_files_limit{%s})", selector, selector),
+		Expr:      fmt.Sprintf("100 * max(mysql_global_status_open_files{%s}) / clamp_min(max(mysql_global_variables_open_files_limit{%s}), 1)", selector, selector),
 		Required:  []string{"mysql_global_status_open_files", "mysql_global_variables_open_files_limit"},
 		WarnAbove: floatPtr(75),
 		CritAbove: floatPtr(90),
@@ -1559,7 +1560,7 @@ func (r databaseStatusRunner) analyzePostgreSQL(ctx context.Context, selector st
 		MetricKey: "connection_usage_pct",
 		Code:      "postgresql_connection_pressure",
 		Title:     "PostgreSQL 连接使用率偏高",
-		Expr:      fmt.Sprintf("100 * sum(pg_stat_activity_count{%s}) / max(pg_settings_max_connections{%s})", selector, selector),
+		Expr:      fmt.Sprintf("100 * sum(pg_stat_activity_count{%s}) / clamp_min(max(pg_settings_max_connections{%s}), 1)", selector, selector),
 		Required:  []string{"pg_stat_activity_count", "pg_settings_max_connections"},
 		WarnAbove: floatPtr(75),
 		CritAbove: floatPtr(90),
@@ -1698,7 +1699,7 @@ func (r databaseStatusRunner) analyzeRedis(ctx context.Context, selector string,
 		MetricKey: "client_usage_pct",
 		Code:      "redis_client_pressure",
 		Title:     "Redis 客户端连接使用率偏高",
-		Expr:      fmt.Sprintf("100 * max(redis_connected_clients{%s}) / max(redis_config_maxclients{%s})", selector, selector),
+		Expr:      fmt.Sprintf("100 * max(redis_connected_clients{%s}) / clamp_min(max(redis_config_maxclients{%s}), 1)", selector, selector),
 		Required:  []string{"redis_connected_clients", "redis_config_maxclients"},
 		WarnAbove: floatPtr(75),
 		CritAbove: floatPtr(90),
@@ -1839,7 +1840,7 @@ func (r databaseStatusRunner) checkRedisMemory(ctx context.Context, selector str
 	}
 	ratio := 100 * used / maxBytes
 	row.Metrics["memory_usage_pct"] = ratio
-	expr := fmt.Sprintf("100 * max(redis_memory_used_bytes{%[1]s}) / max(redis_memory_max_bytes{%[1]s})", selector)
+	expr := fmt.Sprintf("100 * max(redis_memory_used_bytes{%[1]s}) / clamp_min(max(redis_memory_max_bytes{%[1]s}), 1)", selector)
 	switch {
 	case ratio > 90:
 		row.Findings = append(row.Findings, DatabaseStatusFinding{
@@ -1963,7 +1964,7 @@ func (r databaseStatusRunner) checkRedisKeyspaceHitRatio(ctx context.Context, se
 	}
 	ratio := 100 * hits / total
 	row.Metrics["keyspace_hit_ratio_pct"] = ratio
-	expr := fmt.Sprintf("100 * sum(rate(redis_keyspace_hits_total{%[1]s}[5m])) / (sum(rate(redis_keyspace_hits_total{%[1]s}[5m])) + sum(rate(redis_keyspace_misses_total{%[1]s}[5m])))", selector)
+	expr := fmt.Sprintf("100 * sum(rate(redis_keyspace_hits_total{%[1]s}[5m])) / clamp_min(sum(rate(redis_keyspace_hits_total{%[1]s}[5m])) + sum(rate(redis_keyspace_misses_total{%[1]s}[5m])), 1)", selector)
 	switch {
 	case ratio < 50:
 		row.Findings = append(row.Findings, DatabaseStatusFinding{
@@ -2153,7 +2154,7 @@ func (r databaseStatusRunner) analyzeMongoDB(ctx context.Context, selector strin
 		MetricKey: "wiredtiger_cache_usage_pct",
 		Code:      "mongodb_wiredtiger_cache_pressure",
 		Title:     "MongoDB WiredTiger cache 使用率偏高",
-		Expr:      fmt.Sprintf("100 * max(mongodb_ss_wt_cache_bytes_currently_in_the_cache{%s}) / max(mongodb_ss_wt_cache_maximum_bytes_configured{%s})", selector, selector),
+		Expr:      fmt.Sprintf("100 * max(mongodb_ss_wt_cache_bytes_currently_in_the_cache{%s}) / clamp_min(max(mongodb_ss_wt_cache_maximum_bytes_configured{%s}), 1)", selector, selector),
 		Required:  []string{"mongodb_ss_wt_cache_bytes_currently_in_the_cache", "mongodb_ss_wt_cache_maximum_bytes_configured"},
 		WarnAbove: floatPtr(80),
 		CritAbove: floatPtr(95),
@@ -2163,7 +2164,7 @@ func (r databaseStatusRunner) analyzeMongoDB(ctx context.Context, selector strin
 		MetricKey: "wiredtiger_dirty_cache_pct",
 		Code:      "mongodb_wiredtiger_dirty_cache_pressure",
 		Title:     "MongoDB WiredTiger dirty cache 比例偏高",
-		Expr:      fmt.Sprintf("100 * max(mongodb_ss_wt_cache_tracked_dirty_bytes_in_the_cache{%s}) / max(mongodb_ss_wt_cache_maximum_bytes_configured{%s})", selector, selector),
+		Expr:      fmt.Sprintf("100 * max(mongodb_ss_wt_cache_tracked_dirty_bytes_in_the_cache{%s}) / clamp_min(max(mongodb_ss_wt_cache_maximum_bytes_configured{%s}), 1)", selector, selector),
 		Required:  []string{"mongodb_ss_wt_cache_tracked_dirty_bytes_in_the_cache", "mongodb_ss_wt_cache_maximum_bytes_configured"},
 		WarnAbove: floatPtr(10),
 		CritAbove: floatPtr(20),
@@ -2414,6 +2415,9 @@ func (r databaseStatusRunner) queryScalar(ctx context.Context, expr string) (flo
 	vals := instantValues(res)
 	if len(vals) == 0 {
 		return 0, false, nil
+	}
+	if math.IsNaN(vals[0].Value) || math.IsInf(vals[0].Value, 0) {
+		return 0, false, fmt.Errorf("non-finite Prometheus value %v", vals[0].Value)
 	}
 	return vals[0].Value, true, nil
 }

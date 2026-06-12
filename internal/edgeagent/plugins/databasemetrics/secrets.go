@@ -118,7 +118,7 @@ func extractExistingDatabasePassword(dbType, content string) (string, error) {
 	}
 	u, err := url.Parse(content)
 	if err != nil {
-		return "", fmt.Errorf("parse existing secret URI: %w", err)
+		return "", errors.New("parse existing secret URI: invalid URI")
 	}
 	if u.User == nil {
 		return "", nil

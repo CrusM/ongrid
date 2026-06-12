@@ -132,10 +132,11 @@ func (p *Plugin) Start(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	p.cancelRun = cancel
 	p.stoppedCh = make(chan struct{})
+	stopped := p.stoppedCh
 	cfgCopy := p.cfg
 	p.mu.Unlock()
 
-	go p.runLoop(runCtx, cfgCopy)
+	go p.runLoop(runCtx, cfgCopy, stopped)
 	p.setState(plugins.StateRunning, nil)
 	return nil
 }
@@ -180,8 +181,8 @@ func (p *Plugin) HealthSnapshot() plugins.PluginHealth {
 // runLoop is the scrape-and-push loop. It immediately runs one tick so a
 // freshly-enabled plugin produces samples without waiting a full
 // interval, then loops at spec.scrape_interval.
-func (p *Plugin) runLoop(ctx context.Context, cfg plugins.PluginConfig) {
-	defer close(p.stoppedCh)
+func (p *Plugin) runLoop(ctx context.Context, cfg plugins.PluginConfig, stopped chan struct{}) {
+	defer close(stopped)
 
 	spec, err := parseSpec(cfg.Spec)
 	if err != nil {

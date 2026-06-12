@@ -96,10 +96,11 @@ func (p *Plugin) Start(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	p.cancelRun = cancel
 	p.stoppedCh = make(chan struct{})
+	stopped := p.stoppedCh
 	cfgCopy := p.cfg
 	p.mu.Unlock()
 
-	go p.run(runCtx, cfgCopy)
+	go p.run(runCtx, cfgCopy, stopped)
 	p.setPluginState(plugins.StateRunning, nil)
 	return nil
 }
@@ -141,8 +142,8 @@ func (p *Plugin) HealthSnapshot() plugins.PluginHealth {
 	return h
 }
 
-func (p *Plugin) run(ctx context.Context, cfg plugins.PluginConfig) {
-	defer close(p.stoppedCh)
+func (p *Plugin) run(ctx context.Context, cfg plugins.PluginConfig, stopped chan struct{}) {
+	defer close(stopped)
 	defer func() {
 		if r := recover(); r != nil {
 			p.log.Error("databasemetrics panic recovered", slog.Any("panic", r), slog.String("stack", string(debug.Stack())))
@@ -272,13 +273,29 @@ func (p *Plugin) scrapeAndPush(ctx context.Context, source sourceSpec, target me
 	defer cancel()
 	samples, err := metricscommon.Scrape(rctx, target)
 	if err != nil {
+		if pushErr := p.pushPromSamples(ctx, target, []tunnel.PromSample{
+			metricscommon.ScrapeUpSample(time.Now(), Name, target, false),
+		}); pushErr != nil {
+			p.log.Warn("databasemetrics push scrape up failed",
+				slog.String("source", source.ID),
+				slog.Any("err", pushErr))
+		}
 		p.setSourceState(source, "failed", 0, err)
 		return
 	}
+	scraped := len(samples)
+	samples = append(samples, metricscommon.ScrapeUpSample(time.Now(), Name, target, true))
+	if err := p.pushPromSamples(ctx, target, samples); err != nil {
+		p.setSourceState(source, "failed", scraped, err)
+		return
+	}
+	p.setSourceState(source, "running", scraped, nil)
+}
+
+func (p *Plugin) pushPromSamples(ctx context.Context, target metricscommon.Target, samples []tunnel.PromSample) error {
 	edgeID := p.edgeID()
 	if edgeID == 0 {
-		p.setSourceState(source, "failed", len(samples), fmt.Errorf("edge_id=0; waiting for register_edge"))
-		return
+		return fmt.Errorf("edge_id=0; waiting for register_edge")
 	}
 	pctx, pcancel := context.WithTimeout(ctx, 15*time.Second)
 	defer pcancel()
@@ -288,10 +305,9 @@ func (p *Plugin) scrapeAndPush(ctx context.Context, source sourceSpec, target me
 		Source:  target.SourceLabel,
 		Samples: samples,
 	}, &resp); err != nil {
-		p.setSourceState(source, "failed", len(samples), err)
-		return
+		return err
 	}
-	p.setSourceState(source, "running", len(samples), nil)
+	return nil
 }
 
 func readSecretFile(path string) (string, error) {

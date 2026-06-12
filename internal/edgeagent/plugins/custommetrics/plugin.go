@@ -86,10 +86,11 @@ func (p *Plugin) Start(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	p.cancelRun = cancel
 	p.stoppedCh = make(chan struct{})
+	stopped := p.stoppedCh
 	cfgCopy := p.cfg
 	p.mu.Unlock()
 
-	go p.run(runCtx, cfgCopy)
+	go p.run(runCtx, cfgCopy, stopped)
 	p.setPluginState(plugins.StateRunning, nil)
 	return nil
 }
@@ -131,8 +132,8 @@ func (p *Plugin) HealthSnapshot() plugins.PluginHealth {
 	return h
 }
 
-func (p *Plugin) run(ctx context.Context, cfg plugins.PluginConfig) {
-	defer close(p.stoppedCh)
+func (p *Plugin) run(ctx context.Context, cfg plugins.PluginConfig, stopped chan struct{}) {
+	defer close(stopped)
 	defer func() {
 		if r := recover(); r != nil {
 			p.log.Error("custommetrics panic recovered", slog.Any("panic", r), slog.String("stack", string(debug.Stack())))
@@ -188,15 +189,31 @@ func (p *Plugin) scrapeAndPush(ctx context.Context, target metricscommon.Target)
 	defer cancel()
 	samples, err := metricscommon.Scrape(rctx, target)
 	if err != nil {
+		if pushErr := p.pushPromSamples(ctx, target, []tunnel.PromSample{
+			metricscommon.ScrapeUpSample(time.Now(), Name, target, false),
+		}); pushErr != nil {
+			p.log.Warn("custommetrics push scrape up failed",
+				slog.String("target", target.ID),
+				slog.Any("err", pushErr))
+		}
 		p.setTargetState(target, "failed", 0, err)
 		p.log.Warn("custommetrics scrape failed", slog.String("target", target.ID), slog.String("url", target.URL), slog.Any("err", err))
 		return
 	}
+	scraped := len(samples)
+	samples = append(samples, metricscommon.ScrapeUpSample(time.Now(), Name, target, true))
+	if err := p.pushPromSamples(ctx, target, samples); err != nil {
+		p.setTargetState(target, "failed", scraped, err)
+		p.log.Warn("custommetrics push failed", slog.String("target", target.ID), slog.Int("samples", len(samples)), slog.Any("err", err))
+		return
+	}
+	p.setTargetState(target, "running", scraped, nil)
+}
+
+func (p *Plugin) pushPromSamples(ctx context.Context, target metricscommon.Target, samples []tunnel.PromSample) error {
 	edgeID := p.edgeID()
 	if edgeID == 0 {
-		err := fmt.Errorf("edge_id=0; waiting for register_edge")
-		p.setTargetState(target, "failed", len(samples), err)
-		return
+		return fmt.Errorf("edge_id=0; waiting for register_edge")
 	}
 	pctx, pcancel := context.WithTimeout(ctx, 15*time.Second)
 	defer pcancel()
@@ -206,11 +223,9 @@ func (p *Plugin) scrapeAndPush(ctx context.Context, target metricscommon.Target)
 		Source:  target.SourceLabel,
 		Samples: samples,
 	}, &resp); err != nil {
-		p.setTargetState(target, "failed", len(samples), err)
-		p.log.Warn("custommetrics push failed", slog.String("target", target.ID), slog.Int("samples", len(samples)), slog.Any("err", err))
-		return
+		return err
 	}
-	p.setTargetState(target, "running", len(samples), nil)
+	return nil
 }
 
 func (p *Plugin) resetTargetHealthLocked(targets []metricscommon.Target) {

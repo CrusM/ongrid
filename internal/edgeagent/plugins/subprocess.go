@@ -32,31 +32,31 @@ import (
 type SubprocessPlugin struct {
 	// Static (set by concrete plugin constructor).
 	name         string
-	binary       string                                  // /opt/ongrid-edge/bin/promtail
-	workDir      string                                  // /var/lib/ongrid-edge/plugins/logs
-	configFile   string                                  // workDir/promtail.yaml
-	configRender func(PluginConfig) ([]byte, error)       // PluginConfig -> promtail.yaml bytes (nil = no config file written)
+	binary       string                                             // /opt/ongrid-edge/bin/promtail
+	workDir      string                                             // /var/lib/ongrid-edge/plugins/logs
+	configFile   string                                             // workDir/promtail.yaml
+	configRender func(PluginConfig) ([]byte, error)                 // PluginConfig -> promtail.yaml bytes (nil = no config file written)
 	args         func(cfg PluginConfig, configFile string) []string // PluginConfig + path -> CLI argv
 	log          *slog.Logger
 
 	// Mutable runtime state.
-	mu           sync.Mutex
-	cfg          PluginConfig
-	cmd          *exec.Cmd
-	cancelRun    context.CancelFunc
-	health       PluginHealth
-	wantRunning  bool   // set by Start, cleared by Stop
-	stoppedCh    chan struct{}
+	mu          sync.Mutex
+	cfg         PluginConfig
+	cmd         *exec.Cmd
+	cancelRun   context.CancelFunc
+	health      PluginHealth
+	wantRunning bool // set by Start, cleared by Stop
+	stoppedCh   chan struct{}
 }
 
 // SubprocessOpts is the constructor argument for NewSubprocess. Concrete
 // plugins (logs, traces, ...) wrap this with their own constructor that
 // fills in the binary / configRender / args fields.
 type SubprocessOpts struct {
-	Name         string
-	Binary       string
-	WorkDir      string
-	ConfigFile   string                                   // path under WorkDir to write the rendered config
+	Name       string
+	Binary     string
+	WorkDir    string
+	ConfigFile string // path under WorkDir to write the rendered config
 	// ConfigRender returns the bytes to write at ConfigFile. Optional —
 	// plugins like hostmetrics (node_exporter, no config file) leave this
 	// nil and put everything into Args via PluginConfig.
@@ -64,8 +64,8 @@ type SubprocessOpts struct {
 	// Args builds the subprocess argv from the plugin's current
 	// PluginConfig + the rendered config path. Receiving the cfg lets
 	// config-file-less plugins encode spec into CLI flags.
-	Args         func(cfg PluginConfig, configFile string) []string
-	Log          *slog.Logger
+	Args func(cfg PluginConfig, configFile string) []string
+	Log  *slog.Logger
 }
 
 // NewSubprocess builds a SubprocessPlugin from opts. Caller is responsible
@@ -138,9 +138,10 @@ func (s *SubprocessPlugin) Start(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	s.cancelRun = cancel
 	s.stoppedCh = make(chan struct{})
+	stopped := s.stoppedCh
 	s.mu.Unlock()
 
-	go s.runLoop(runCtx)
+	go s.runLoop(runCtx, stopped)
 	return nil
 }
 
@@ -183,8 +184,8 @@ func (s *SubprocessPlugin) HealthSnapshot() PluginHealth {
 // runLoop keeps the subprocess alive while wantRunning is true, with
 // exponential backoff on crash. Returns when ctx is cancelled (Stop or
 // supervisor shutdown).
-func (s *SubprocessPlugin) runLoop(ctx context.Context) {
-	defer close(s.stoppedCh)
+func (s *SubprocessPlugin) runLoop(ctx context.Context, stopped chan struct{}) {
+	defer close(stopped)
 
 	backoff := time.Second
 	const backoffCap = 5 * time.Minute

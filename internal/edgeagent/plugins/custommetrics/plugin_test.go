@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ongridio/ongrid/internal/edgeagent/plugins"
+	"github.com/ongridio/ongrid/internal/edgeagent/plugins/metricscommon"
 	"github.com/ongridio/ongrid/internal/pkg/tunnel"
 )
 
@@ -35,6 +36,78 @@ func (f *fakePusher) count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.calls)
+}
+
+func (f *fakePusher) snapshot() []tunnel.PushPromSamplesRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]tunnel.PushPromSamplesRequest, len(f.calls))
+	copy(out, f.calls)
+	return out
+}
+
+func TestCustomMetricsPushesSyntheticUpSamples(t *testing.T) {
+	okSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		_, _ = w.Write([]byte(`# TYPE demo_total counter
+demo_total 7
+`))
+	}))
+	t.Cleanup(okSrv.Close)
+	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	t.Cleanup(failSrv.Close)
+
+	pusher := &fakePusher{}
+	p := New(pusher, func() uint64 { return 42 }, nil)
+	p.scrapeAndPush(context.Background(), metricscommon.Target{
+		ID:          "ok",
+		Name:        "OK",
+		URL:         okSrv.URL + "/metrics",
+		Timeout:     time.Second,
+		SourceLabel: "custom:ok",
+		ExtraLabels: map[string]string{"service": "api"},
+		Kind:        "custom",
+	})
+	p.scrapeAndPush(context.Background(), metricscommon.Target{
+		ID:          "bad",
+		Name:        "Bad",
+		URL:         failSrv.URL + "/metrics",
+		Timeout:     time.Second,
+		SourceLabel: "custom:bad",
+		Kind:        "custom",
+	})
+
+	calls := pusher.snapshot()
+	if len(calls) != 2 {
+		t.Fatalf("push calls = %d, want 2: %#v", len(calls), calls)
+	}
+	assertUpSample(t, calls[0], "custom:ok", "ok", 1)
+	assertUpSample(t, calls[1], "custom:bad", "bad", 0)
+	if len(calls[1].Samples) != 1 {
+		t.Fatalf("failed scrape samples = %d, want only synthetic up sample", len(calls[1].Samples))
+	}
+}
+
+func TestCustomMetricsRunClosesStartScopedStoppedChannel(t *testing.T) {
+	p := New(nil, nil, nil)
+	stopped := make(chan struct{})
+	current := make(chan struct{})
+	p.stoppedCh = current
+
+	p.run(context.Background(), plugins.PluginConfig{}, stopped)
+
+	select {
+	case <-stopped:
+	default:
+		t.Fatal("run did not close start-scoped stopped channel")
+	}
+	select {
+	case <-current:
+		t.Fatal("run closed current p.stoppedCh instead of start-scoped channel")
+	default:
+	}
 }
 
 func TestCustomMetricsTargetsAreIsolated(t *testing.T) {
@@ -117,4 +190,23 @@ func waitFor(t *testing.T, timeout time.Duration, ok func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("condition was not met before timeout")
+}
+
+func assertUpSample(t *testing.T, req tunnel.PushPromSamplesRequest, source, targetID string, value float64) {
+	t.Helper()
+	if req.Source != source {
+		t.Fatalf("source = %q, want %q", req.Source, source)
+	}
+	for _, sample := range req.Samples {
+		if sample.Name == metricscommon.ScrapeUpMetricName && sample.Labels["target_id"] == targetID {
+			if sample.Value != value {
+				t.Fatalf("up value for %s = %v, want %v", targetID, sample.Value, value)
+			}
+			if sample.Labels["plugin"] != Name {
+				t.Fatalf("up plugin label = %q, want %q", sample.Labels["plugin"], Name)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing up sample for target %q in %#v", targetID, req.Samples)
 }

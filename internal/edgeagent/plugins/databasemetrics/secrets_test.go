@@ -138,6 +138,39 @@ func TestBuildManagedSecretPreservingPasswordForPostgresSkipVerify(t *testing.T)
 	}
 }
 
+func TestBuildManagedSecretPreservingPasswordDoesNotLeakInvalidExistingURI(t *testing.T) {
+	base := t.TempDir()
+	path := filepath.Join(base, "pg-prod.dsn")
+	current := "postgresql://ongrid:old-secret@127.0.0.1:15432/%zz\n"
+	if err := os.WriteFile(path, []byte(current), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := buildManagedSecretPreservingPasswordInBase(base, tunnel.WriteDatabaseMetricsSecretRequest{
+		SourceID:         "pg-prod",
+		Path:             path,
+		DBType:           "postgresql",
+		PreservePassword: true,
+		Credentials: map[string]interface{}{
+			"host":     "127.0.0.1",
+			"port":     "15432",
+			"username": "ongrid",
+			"database": "postgres",
+		},
+	})
+	if err == nil {
+		t.Fatal("buildManagedSecretPreservingPasswordInBase() error = nil, want invalid existing URI error")
+	}
+	for _, leaked := range []string{"old-secret", strings.TrimSpace(current)} {
+		if strings.Contains(err.Error(), leaked) {
+			t.Fatalf("error leaked existing secret content: %v", err)
+		}
+	}
+	if !strings.Contains(err.Error(), "parse existing secret URI") {
+		t.Fatalf("error = %v, want parse context", err)
+	}
+}
+
 func TestBuildManagedSecretPreservingPasswordForMySQLSkipVerify(t *testing.T) {
 	base := t.TempDir()
 	path := filepath.Join(base, "mysql-prod.my.cnf")

@@ -252,14 +252,14 @@ func TestAnalyzeDatabaseStatus_MySQLConnectionPressure(t *testing.T) {
 			promTestValue{metric: map[string]string{"__name__": "mysql_global_status_innodb_buffer_pool_reads"}, value: "1"},
 			promTestValue{metric: map[string]string{"__name__": "mysql_global_status_innodb_buffer_pool_read_requests"}, value: "1"},
 		),
-		`min(mysql_up{` + selector + `})`:                                                                                                    promVector(promTestValue{value: "1"}),
-		`max(mysql_global_status_threads_connected{` + selector + `})`:                                                                       promVector(promTestValue{value: "138"}),
-		`max(mysql_global_variables_max_connections{` + selector + `})`:                                                                      promVector(promTestValue{value: "150"}),
-		`max(mysql_global_status_threads_running{` + selector + `})`:                                                                         promVector(promTestValue{value: "4"}),
-		`sum(rate(mysql_global_status_questions{` + selector + `}[5m]))`:                                                                     promVector(promTestValue{value: "12.5"}),
-		`100 * max(mysql_global_status_threads_connected{` + selector + `}) / max(mysql_global_variables_max_connections{` + selector + `})`: promVector(promTestValue{value: "92"}),
-		`sum(rate(mysql_global_status_slow_queries{` + selector + `}[5m]))`:                                                                  promVector(promTestValue{value: "0"}),
-		`sum(increase(mysql_global_status_aborted_connects{` + selector + `}[15m]))`:                                                         promVector(promTestValue{value: "0"}),
+		`min(mysql_up{` + selector + `})`:                                promVector(promTestValue{value: "1"}),
+		`max(mysql_global_status_threads_connected{` + selector + `})`:   promVector(promTestValue{value: "138"}),
+		`max(mysql_global_variables_max_connections{` + selector + `})`:  promVector(promTestValue{value: "150"}),
+		`max(mysql_global_status_threads_running{` + selector + `})`:     promVector(promTestValue{value: "4"}),
+		`sum(rate(mysql_global_status_questions{` + selector + `}[5m]))`: promVector(promTestValue{value: "12.5"}),
+		`100 * max(mysql_global_status_threads_connected{` + selector + `}) / clamp_min(max(mysql_global_variables_max_connections{` + selector + `}), 1)`:                                                promVector(promTestValue{value: "92"}),
+		`sum(rate(mysql_global_status_slow_queries{` + selector + `}[5m]))`:                                                                                                                               promVector(promTestValue{value: "0"}),
+		`sum(increase(mysql_global_status_aborted_connects{` + selector + `}[15m]))`:                                                                                                                      promVector(promTestValue{value: "0"}),
 		`100 * (1 - sum(rate(mysql_global_status_innodb_buffer_pool_reads{` + selector + `}[5m])) / clamp_min(sum(rate(mysql_global_status_innodb_buffer_pool_read_requests{` + selector + `}[5m])), 1))`: promVector(promTestValue{value: "96"}),
 	}}
 	reg := NewRegistry(&fakeCaller{}, uc, nil, prom, nil, nil, nil, slog.Default())
@@ -326,6 +326,40 @@ func TestAnalyzeDatabaseStatus_MySQLConnectionPressure(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("missing mysql_connection_pressure finding: %+v", src.Findings)
+	}
+}
+
+func TestAnalyzeDatabaseStatus_NonFiniteThresholdValueDoesNotBecomeCritical(t *testing.T) {
+	expr := `100 * max(mysql_global_status_threads_connected{}) / max(mysql_global_variables_max_connections{})`
+	runner := databaseStatusRunner{promQuery: &fakeDatabaseProm{results: map[string]*promquery.InstantResult{
+		expr: promVector(promTestValue{value: "+Inf"}),
+	}}}
+	row := &DatabaseStatusSource{Metrics: map[string]float64{}}
+
+	runner.checkThreshold(context.Background(), "", map[string]struct{}{
+		"mysql_global_status_threads_connected":  {},
+		"mysql_global_variables_max_connections": {},
+	}, row, numericCheck{
+		MetricKey: "connection_usage_pct",
+		Code:      "mysql_connection_pressure",
+		Title:     "MySQL 连接使用率偏高",
+		Expr:      expr,
+		Required:  []string{"mysql_global_status_threads_connected", "mysql_global_variables_max_connections"},
+		CritAbove: floatPtr(90),
+		Unit:      "%",
+	})
+
+	if _, ok := row.Metrics["connection_usage_pct"]; ok {
+		t.Fatalf("non-finite value should not be stored as a metric: %+v", row.Metrics)
+	}
+	if len(row.Findings) != 1 {
+		t.Fatalf("findings=%d want 1 unknown finding: %+v", len(row.Findings), row.Findings)
+	}
+	if row.Findings[0].Severity != "unknown" || row.Findings[0].Code != "prom_query_error" {
+		t.Fatalf("finding = %+v, want structured unknown prom_query_error", row.Findings[0])
+	}
+	if strings.Contains(row.Findings[0].Message, "critical") {
+		t.Fatalf("non-finite value was reported like a critical threshold: %+v", row.Findings[0])
 	}
 }
 
@@ -500,34 +534,34 @@ func TestAnalyzeDatabaseStatus_MongoDBServerStatusMetrics(t *testing.T) {
 			promTestValue{metric: map[string]string{"__name__": "mongodb_pbm_cluster_backup_configured"}, value: "1"},
 			promTestValue{metric: map[string]string{"__name__": "mongodb_future_new_metric"}, value: "1"},
 		),
-		`min(mongodb_up{` + selector + `})`:                                                                                                                       promVector(promTestValue{value: "1"}),
-		`max(mongodb_ss_connections{` + selector + `,conn_type="current"})`:                                                                                       promVector(promTestValue{value: "12"}),
-		`max(mongodb_ss_connections{` + selector + `,conn_type="available"})`:                                                                                     promVector(promTestValue{value: "838848"}),
-		`sum(rate(mongodb_ss_opcounters{` + selector + `}[5m]))`:                                                                                                  promVector(promTestValue{value: "9.5"}),
-		`sum(increase(mongodb_ss_asserts{` + selector + `}[15m]))`:                                                                                                promVector(promTestValue{value: "0"}),
-		`sum(increase(mongodb_ss_extra_info_page_faults{` + selector + `}[15m]))`:                                                                                 promVector(promTestValue{value: "0"}),
-		`max(mongodb_ss_mem_resident{` + selector + `}) * 1024 * 1024`:                                                                                            promVector(promTestValue{value: "268435456"}),
-		`max(mongodb_fcv_feature_compatibility_version{` + selector + `})`:                                                                                        promVector(promTestValue{value: "8"}),
-		`sum(rate(mongodb_ss_network_bytesIn{` + selector + `}[5m]))`:                                                                                             promVector(promTestValue{value: "128"}),
-		`sum(rate(mongodb_ss_network_bytesOut{` + selector + `}[5m]))`:                                                                                            promVector(promTestValue{value: "256"}),
-		`sum(increase(mongodb_ss_connections_establishmentRateLimit_rejected{` + selector + `}[15m]))`:                                                            promVector(promTestValue{value: "0"}),
-		`max(mongodb_ss_globalLock_currentQueue{` + selector + `})`:                                                                                               promVector(promTestValue{value: "0"}),
-		`max(mongodb_ss_flowControl_isLagged{` + selector + `})`:                                                                                                  promVector(promTestValue{value: "0"}),
-		`100 * max(mongodb_ss_wt_cache_bytes_currently_in_the_cache{` + selector + `}) / max(mongodb_ss_wt_cache_maximum_bytes_configured{` + selector + `})`:     promVector(promTestValue{value: "25"}),
-		`100 * max(mongodb_ss_wt_cache_tracked_dirty_bytes_in_the_cache{` + selector + `}) / max(mongodb_ss_wt_cache_maximum_bytes_configured{` + selector + `})`: promVector(promTestValue{value: "1"}),
-		`sum(increase(mongodb_ss_wt_cache_operations_timed_out_waiting_for_space_in_cache{` + selector + `}[15m]))`:                                               promVector(promTestValue{value: "0"}),
-		`sum(rate(mongodb_ss_opLatencies_latency{` + selector + `}[5m])) / clamp_min(sum(rate(mongodb_ss_opLatencies_ops{` + selector + `}[5m])), 1) / 1000`:      promVector(promTestValue{value: "10"}),
-		`sum(increase(mongodb_ss_metrics_queryExecutor_collectionScans_total{` + selector + `}[15m]))`:                                                            promVector(promTestValue{value: "0"}),
-		`sum(increase(mongodb_ss_metrics_query_sort_spillToDisk{` + selector + `}[15m]))`:                                                                         promVector(promTestValue{value: "0"}),
-		`sum(increase(mongodb_ss_metrics_cursor_timedOut{` + selector + `}[15m]))`:                                                                                promVector(promTestValue{value: "0"}),
-		`max(mongodb_ss_transactions_currentOpen{` + selector + `})`:                                                                                              promVector(promTestValue{value: "1"}),
-		`count(count by (database) (mongodb_dbstats_dataSize{` + selector + `}))`:                                                                                 promVector(promTestValue{value: "3"}),
-		`sum(mongodb_dbstats_dataSize{` + selector + `})`:                                                                                                         promVector(promTestValue{value: "4096"}),
-		`sum(mongodb_dbstats_freeStorageSize{` + selector + `})`:                                                                                                  promVector(promTestValue{value: "512"}),
-		`sum(rate(mongodb_top_total_count{` + selector + `}[5m]))`:                                                                                                promVector(promTestValue{value: "2"}),
-		`max(mongodb_currentop_fsync_lock_state{` + selector + `})`:                                                                                               promVector(promTestValue{value: "0"}),
-		`sum(increase(mongodb_profile_slow_query_count{` + selector + `}[15m]))`:                                                                                  promVector(promTestValue{value: "0"}),
-		`max(mongodb_pbm_cluster_backup_configured{` + selector + `})`:                                                                                            promVector(promTestValue{value: "1"}),
+		`min(mongodb_up{` + selector + `})`:                                                            promVector(promTestValue{value: "1"}),
+		`max(mongodb_ss_connections{` + selector + `,conn_type="current"})`:                            promVector(promTestValue{value: "12"}),
+		`max(mongodb_ss_connections{` + selector + `,conn_type="available"})`:                          promVector(promTestValue{value: "838848"}),
+		`sum(rate(mongodb_ss_opcounters{` + selector + `}[5m]))`:                                       promVector(promTestValue{value: "9.5"}),
+		`sum(increase(mongodb_ss_asserts{` + selector + `}[15m]))`:                                     promVector(promTestValue{value: "0"}),
+		`sum(increase(mongodb_ss_extra_info_page_faults{` + selector + `}[15m]))`:                      promVector(promTestValue{value: "0"}),
+		`max(mongodb_ss_mem_resident{` + selector + `}) * 1024 * 1024`:                                 promVector(promTestValue{value: "268435456"}),
+		`max(mongodb_fcv_feature_compatibility_version{` + selector + `})`:                             promVector(promTestValue{value: "8"}),
+		`sum(rate(mongodb_ss_network_bytesIn{` + selector + `}[5m]))`:                                  promVector(promTestValue{value: "128"}),
+		`sum(rate(mongodb_ss_network_bytesOut{` + selector + `}[5m]))`:                                 promVector(promTestValue{value: "256"}),
+		`sum(increase(mongodb_ss_connections_establishmentRateLimit_rejected{` + selector + `}[15m]))`: promVector(promTestValue{value: "0"}),
+		`max(mongodb_ss_globalLock_currentQueue{` + selector + `})`:                                    promVector(promTestValue{value: "0"}),
+		`max(mongodb_ss_flowControl_isLagged{` + selector + `})`:                                       promVector(promTestValue{value: "0"}),
+		`100 * max(mongodb_ss_wt_cache_bytes_currently_in_the_cache{` + selector + `}) / clamp_min(max(mongodb_ss_wt_cache_maximum_bytes_configured{` + selector + `}), 1)`:     promVector(promTestValue{value: "25"}),
+		`100 * max(mongodb_ss_wt_cache_tracked_dirty_bytes_in_the_cache{` + selector + `}) / clamp_min(max(mongodb_ss_wt_cache_maximum_bytes_configured{` + selector + `}), 1)`: promVector(promTestValue{value: "1"}),
+		`sum(increase(mongodb_ss_wt_cache_operations_timed_out_waiting_for_space_in_cache{` + selector + `}[15m]))`:                                                             promVector(promTestValue{value: "0"}),
+		`sum(rate(mongodb_ss_opLatencies_latency{` + selector + `}[5m])) / clamp_min(sum(rate(mongodb_ss_opLatencies_ops{` + selector + `}[5m])), 1) / 1000`:                    promVector(promTestValue{value: "10"}),
+		`sum(increase(mongodb_ss_metrics_queryExecutor_collectionScans_total{` + selector + `}[15m]))`:                                                                          promVector(promTestValue{value: "0"}),
+		`sum(increase(mongodb_ss_metrics_query_sort_spillToDisk{` + selector + `}[15m]))`:                                                                                       promVector(promTestValue{value: "0"}),
+		`sum(increase(mongodb_ss_metrics_cursor_timedOut{` + selector + `}[15m]))`:                                                                                              promVector(promTestValue{value: "0"}),
+		`max(mongodb_ss_transactions_currentOpen{` + selector + `})`:                                                                                                            promVector(promTestValue{value: "1"}),
+		`count(count by (database) (mongodb_dbstats_dataSize{` + selector + `}))`:                                                                                               promVector(promTestValue{value: "3"}),
+		`sum(mongodb_dbstats_dataSize{` + selector + `})`:                                                                                                                       promVector(promTestValue{value: "4096"}),
+		`sum(mongodb_dbstats_freeStorageSize{` + selector + `})`:                                                                                                                promVector(promTestValue{value: "512"}),
+		`sum(rate(mongodb_top_total_count{` + selector + `}[5m]))`:                                                                                                              promVector(promTestValue{value: "2"}),
+		`max(mongodb_currentop_fsync_lock_state{` + selector + `})`:                                                                                                             promVector(promTestValue{value: "0"}),
+		`sum(increase(mongodb_profile_slow_query_count{` + selector + `}[15m]))`:                                                                                                promVector(promTestValue{value: "0"}),
+		`max(mongodb_pbm_cluster_backup_configured{` + selector + `})`:                                                                                                          promVector(promTestValue{value: "1"}),
 	}}
 	reg := NewRegistry(&fakeCaller{}, uc, nil, prom, nil, nil, nil, slog.Default())
 	reg.SetPluginConfigLister(fakePluginConfigLister{rows: map[uint64][]edgebiz.PluginRow{

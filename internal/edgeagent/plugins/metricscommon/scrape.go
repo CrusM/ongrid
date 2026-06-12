@@ -44,6 +44,10 @@ type Target struct {
 const (
 	DefaultInterval = 30 * time.Second
 	DefaultTimeout  = 5 * time.Second
+	// ScrapeUpMetricName mirrors Prometheus's synthetic scrape health metric.
+	// Edge-side scrapers push it because these targets are not scraped by the
+	// central Prometheus server directly.
+	ScrapeUpMetricName = "up"
 )
 
 // Scrape performs one GET, parses the Prometheus text response, applies
@@ -84,6 +88,41 @@ func Scrape(ctx context.Context, target Target) ([]tunnel.PromSample, error) {
 		return nil, fmt.Errorf("sample limit exceeded: got %d limit %d", len(samples), target.SampleLimit)
 	}
 	return samples, nil
+}
+
+// ScrapeUpSample returns the synthetic target availability sample for one
+// edge-side scrape. Labels are intentionally limited to low-cardinality source
+// metadata; target URL and error text must not become metric labels.
+func ScrapeUpSample(now time.Time, plugin string, target Target, up bool) tunnel.PromSample {
+	labels := make(map[string]string, len(target.ExtraLabels)+4)
+	for k, v := range target.ExtraLabels {
+		k = strings.TrimSpace(k)
+		if k != "" {
+			labels[k] = v
+		}
+	}
+	if plugin != "" {
+		labels["plugin"] = plugin
+	}
+	if target.ID != "" {
+		labels["target_id"] = target.ID
+	}
+	if target.Name != "" {
+		labels["target_name"] = target.Name
+	}
+	if target.Kind != "" {
+		labels["kind"] = target.Kind
+	}
+	value := 0.0
+	if up {
+		value = 1
+	}
+	return tunnel.PromSample{
+		Name:   ScrapeUpMetricName,
+		Labels: labels,
+		Value:  value,
+		TsMs:   now.UnixMilli(),
+	}
 }
 
 // ValidateURL checks the target URL shape early during plugin Configure.
