@@ -137,6 +137,7 @@ import (
 	managerserversetting "github.com/ongridio/ongrid/internal/manager/server/setting"
 	managerserverskill "github.com/ongridio/ongrid/internal/manager/server/skill"
 	managerserversystemhealth "github.com/ongridio/ongrid/internal/manager/server/systemhealth"
+	managerserversystemupgrade "github.com/ongridio/ongrid/internal/manager/server/systemupgrade"
 	managerservertopology "github.com/ongridio/ongrid/internal/manager/server/topology"
 	managerservertraces "github.com/ongridio/ongrid/internal/manager/server/traces"
 
@@ -147,6 +148,7 @@ import (
 	managersvcmetric "github.com/ongridio/ongrid/internal/manager/service/metric"
 	managersvcprom "github.com/ongridio/ongrid/internal/manager/service/prometheus"
 	managersvcsystemhealth "github.com/ongridio/ongrid/internal/manager/service/systemhealth"
+	managersvcsystemupgrade "github.com/ongridio/ongrid/internal/manager/service/systemupgrade"
 
 	// Builtin skill init() blocks register Executors with the shared
 	// internal/skill registry. Both manager (metadata) and edge
@@ -1620,6 +1622,10 @@ func main() {
 		LLM:       llmSettingsResolver,
 	})
 	systemHealthHandler := managerserversystemhealth.NewHandler(systemHealthSvc)
+	systemUpgradeSvc := managersvcsystemupgrade.New(managersvcsystemupgrade.Config{
+		CurrentVersion: version,
+	}, nil)
+	systemUpgradeHandler := managerserversystemupgrade.NewHandler(systemUpgradeSvc)
 
 	// HTTP handler for the knowledge base — built here, wired to routes
 	// below. The biz Usecase + tool registry SetKnowledgeSearcher were
@@ -1831,6 +1837,7 @@ func main() {
 			aiopsHandler.Register(protected)
 			alertHandler.Register(protected)
 			systemHealthHandler.Register(protected)
+			systemUpgradeHandler.Register(protected)
 			imbridgeHandler.RegisterProtected(protected)
 			skillHandler.Register(protected)
 			if knowledgeHandler != nil {
