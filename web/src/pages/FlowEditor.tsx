@@ -514,7 +514,10 @@ export default function FlowEditorPage() {
               query={toolQuery}
               onQuery={setToolQuery}
               onPick={(t) =>
-                addNode('tool', { label: t.name, config: { tool: t.name, args: {} } })
+                addNode('tool', {
+                  label: locale === 'zh-CN' ? t.display_zh || t.name : t.name,
+                  config: { tool: t.name, args: {} },
+                })
               }
             />
             <div className="border-t border-zinc-800 px-3 py-2 text-[11px] leading-relaxed text-zinc-600">
@@ -821,7 +824,14 @@ function ToolPalette({
                   className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-[12px] text-zinc-300 transition-colors hover:bg-zinc-800"
                 >
                   <Wrench size={12} className="shrink-0 text-sky-400/80" />
-                  <span className="truncate font-mono text-[11px]">{t.name}</span>
+                  <span className="flex min-w-0 flex-col">
+                    <span className="truncate text-[12px] text-zinc-200">
+                      {locale === 'zh-CN' ? t.display_zh || t.name : t.name}
+                    </span>
+                    {locale === 'zh-CN' && t.display_zh ? (
+                      <span className="truncate font-mono text-[9px] text-zinc-600">{t.name}</span>
+                    ) : null}
+                  </span>
                   {t.class !== 'read' && (
                     <span className="ml-auto shrink-0 rounded bg-amber-900/40 px-1 text-[9px] text-amber-400">
                       {t.class === 'destructive' ? tr('危', 'D') : tr('写', 'W')}

@@ -3165,6 +3165,7 @@ func (c flowToolCatalog) ListTools() []managerbizflow.ToolMeta {
 		}
 		out = append(out, managerbizflow.ToolMeta{
 			Name:        info.Name,
+			DisplayZh:   flowToolLabelZh(info.Name),
 			Description: info.Description,
 			WhenToUse:   info.WhenToUse,
 			Class:       info.Class,
@@ -3224,4 +3225,49 @@ func categorizeFlowTool(name string) string {
 	default:
 		return "other"
 	}
+}
+
+// flowToolLabelZh maps a tool wire name to its Chinese display label for
+// the canvas palette. Single source of truth (the tools register here in
+// main.go, so the zh names live next to them rather than drifting in the
+// frontend). Unmapped tools fall back to the wire name.
+var flowToolLabelZhMap = map[string]string{
+	// observability
+	"query_promql":            "查询指标 (PromQL)",
+	"query_logql":             "查询日志 (LogQL)",
+	"query_traceql":           "查询链路 (TraceQL)",
+	"list_database_sources":   "列出数据库源",
+	"analyze_database_status": "数据库健康分析",
+	// host
+	"host_bash":            "主机命令",
+	"host_restart_service": "重启服务",
+	"get_host_load":        "主机负载",
+	"get_host_processes":   "进程列表",
+	// topology
+	"get_topology":       "拓扑全图",
+	"find_topology_node": "查找拓扑节点",
+	"expand_topology":    "拓扑爆炸半径",
+	// incident
+	"correlate_incident":  "关联事件证据",
+	"get_incident_detail": "事件详情",
+	"query_incidents":     "查询事件",
+	"query_alert_rules":   "查询告警规则",
+	// sre
+	"get_edge_summary":    "边端概览",
+	"query_devices":       "查询设备",
+	"query_change_events": "查询变更事件",
+	"rank_edges":          "边端排名",
+	"find_outlier_edges":  "离群边端",
+	// knowledge
+	"query_knowledge":   "知识库检索",
+	"list_repo_sources": "列出代码仓",
+	"read_source":       "读源码",
+	"grep_source":       "搜源码",
+}
+
+func flowToolLabelZh(name string) string {
+	if zh, ok := flowToolLabelZhMap[name]; ok {
+		return zh
+	}
+	return name
 }

@@ -123,6 +123,7 @@ export function getFlowRun(runId: string) {
 // to render a typed arg form in the config drawer.
 export type FlowToolMeta = {
   name: string;
+  display_zh?: string;
   description: string;
   when_to_use?: string;
   class: string; // read / write / destructive

@@ -15,6 +15,7 @@ import "encoding/json"
 // ToolMeta describes one BaseTool for the node palette.
 type ToolMeta struct {
 	Name        string          // wire name (goes into tool node config.tool)
+	DisplayZh   string          // Chinese display label (falls back to Name)
 	Description string          // one-line "what it does"
 	WhenToUse   string          // disambiguation hint
 	Class       string          // read / write / destructive

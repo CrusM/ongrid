@@ -323,6 +323,7 @@ func (h *Handler) getRun(w http.ResponseWriter, r *http.Request) {
 
 type toolMetaDTO struct {
 	Name        string          `json:"name"`
+	DisplayZh   string          `json:"display_zh,omitempty"`
 	Description string          `json:"description"`
 	WhenToUse   string          `json:"when_to_use,omitempty"`
 	Class       string          `json:"class"`
@@ -343,6 +344,7 @@ func (h *Handler) listTools(w http.ResponseWriter, r *http.Request) {
 	for _, m := range metas {
 		items = append(items, toolMetaDTO{
 			Name:        m.Name,
+			DisplayZh:   m.DisplayZh,
 			Description: m.Description,
 			WhenToUse:   m.WhenToUse,
 			Class:       m.Class,
