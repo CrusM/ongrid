@@ -30,6 +30,7 @@ import {
   Clock,
   GitBranch,
   History,
+  Shuffle,
   Siren,
   Sparkles,
   Play,
@@ -70,12 +71,13 @@ const NODE_META: Record<FlowNodeType, { icon: typeof Bot; color: string; zh: str
   condition: { icon: GitBranch, color: 'text-amber-400', zh: '条件', en: 'Condition' },
   notify: { icon: Bell, color: 'text-rose-400', zh: '通知', en: 'Notify' },
   set: { icon: Variable, color: 'text-zinc-400', zh: '变量', en: 'Set var' },
+  transform: { icon: Shuffle, color: 'text-teal-400', zh: '字段映射', en: 'Edit Fields' },
 };
 
 // Core nodes the user hand-places. `tool` is excluded here — tool nodes
 // come from the searchable catalog (every registered BaseTool), added via
 // addNode('tool', {config:{tool}}).
-const BASE_NODE_TYPES: FlowNodeType[] = ['trigger.manual', 'trigger.alert_fired', 'trigger.cron', 'agent', 'llm', 'condition', 'notify', 'set'];
+const BASE_NODE_TYPES: FlowNodeType[] = ['trigger.manual', 'trigger.alert_fired', 'trigger.cron', 'agent', 'llm', 'condition', 'notify', 'set', 'transform'];
 
 const CATEGORY_ORDER = ['observability', 'host', 'topology', 'incident', 'sre', 'knowledge', 'control', 'other'];
 const CATEGORY_LABEL: Record<string, { zh: string; en: string }> = {
@@ -249,6 +251,9 @@ const CONFIG_FIELDS: Record<FlowNodeType, FieldSpec[]> = {
   set: [
     { key: 'name', zh: '变量名', en: 'Variable name', kind: 'text' },
     { key: 'value', zh: '值（支持 {{…}}）', en: 'Value ({{…}} templates)', kind: 'text' },
+  ],
+  transform: [
+    { key: 'fields', zh: '字段映射（JSON，每个字段值支持 {{…}}）。把上游数据重组成下游需要的字段。', en: 'Field mapping (JSON; each value accepts {{…}}). Reshape upstream data into the fields a downstream node needs.', kind: 'json' },
   ],
 };
 
@@ -1172,17 +1177,20 @@ function flattenPaths(v: unknown, prefix = '', out: string[] = [], depth = 0): s
 
 // staticOutputHints is the fallback when a node hasn't run yet — the known
 // output shape per node type, so the user still sees what to reference.
-function staticOutputHints(flowType: FlowNodeType, hasSchema: boolean): string[] {
+function staticOutputHints(flowType: FlowNodeType, config: Record<string, unknown>): string[] {
   switch (flowType) {
     case 'tool':
       return ['result'];
     case 'agent':
     case 'llm':
-      return hasSchema ? ['answer', 'structured'] : ['answer'];
+      return config?.output_schema ? ['answer', 'structured'] : ['answer'];
     case 'condition':
       return ['result'];
     case 'set':
       return ['name', 'value'];
+    case 'transform':
+      // Output shape = the fields the user declared (dynamic).
+      return Object.keys((config?.fields as Record<string, unknown>) ?? {});
     case 'trigger.alert_fired':
       return ['incident_id', 'rule', 'severity', 'edge_id', 'device_id', 'labels', 'fired_at'];
     case 'trigger.cron':
@@ -1221,8 +1229,7 @@ function UpstreamRefs({
           paths = flattenPaths(ran.output);
           live = true;
         } else {
-          const hasSchema = !!(n.data.config?.output_schema);
-          paths = staticOutputHints(n.data.flowType, hasSchema);
+          paths = staticOutputHints(n.data.flowType, n.data.config ?? {});
         }
         return { id: n.id, label: n.data.label, type: n.data.flowType, paths, live };
       })
@@ -1313,8 +1320,7 @@ function SelfOutputRefs({
     if (ran && ran.output && Object.keys(ran.output).length) {
       return { paths: flattenPaths(ran.output), source: 'live' as const };
     }
-    const hasSchema = !!(node.data.config?.output_schema);
-    return { paths: staticOutputHints(node.data.flowType, hasSchema), source: 'shape' as const };
+    return { paths: staticOutputHints(node.data.flowType, node.data.config ?? {}), source: 'shape' as const };
   }, [node, testOutput, runNodes]);
 
   if (paths.length === 0) return null;

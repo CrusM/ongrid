@@ -81,6 +81,7 @@ func registerBuiltins() {
 	RegisterNode(&NodeSpec{Type: NodeCondition, Kind: KindControl, Category: "flow", Ports: []string{PortTrue, PortFalse}, Execute: execCondition})
 	RegisterNode(&NodeSpec{Type: NodeNotify, Kind: KindAction, Category: "action", Execute: execNotify})
 	RegisterNode(&NodeSpec{Type: NodeSet, Kind: KindData, Category: "data", Execute: execSet})
+	RegisterNode(&NodeSpec{Type: NodeTransform, Kind: KindData, Category: "data", Execute: execTransform})
 }
 
 // --- built-in executors (migrated verbatim from the old execute switch) ---
@@ -236,4 +237,18 @@ func execSet(_ context.Context, _ Executors, cfg map[string]any, rc *RunContext)
 	val := cfg["value"]
 	rc.Vars[name] = val
 	return NodeResult{Output: map[string]any{"name": name, "value": val}, Port: PortNext}, nil
+}
+
+// execTransform — the "edit fields" data node. config.fields is an
+// object {outName: value}; the engine has already template-resolved every
+// value, so the node just emits that constructed object. Lets a user
+// reshape upstream data into the exact fields a downstream node needs
+// (the field-adapter glue for a weakly-typed flow), with no code and no
+// new dependency — values are plain {{...}} templates.
+func execTransform(_ context.Context, _ Executors, cfg map[string]any, _ *RunContext) (NodeResult, error) {
+	fields, _ := cfg["fields"].(map[string]any)
+	if fields == nil {
+		fields = map[string]any{}
+	}
+	return NodeResult{Output: fields, Port: PortNext}, nil
 }

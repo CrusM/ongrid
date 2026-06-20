@@ -33,6 +33,7 @@ const (
 	NodeCondition     = "condition"
 	NodeNotify        = "notify"
 	NodeSet           = "set"
+	NodeTransform     = "transform"
 )
 
 // Control ports.

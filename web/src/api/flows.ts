@@ -12,6 +12,7 @@ export type FlowNodeType =
   | 'trigger.cron'
   | 'agent'
   | 'llm'
+  | 'transform'
   | 'tool'
   | 'condition'
   | 'notify'
