@@ -61,9 +61,23 @@ FROM debian:bookworm-slim
 #     explicit so a future minify pass doesn't surprise us.
 #   - curl: needed by the in-image entry-shim if we ever inline the
 #     model download; lightweight, keep it.
+#   - python3 / python3-pip: the cloud_bash sandbox runs as non-root with
+#     no package manager, so an agent can't install tooling at runtime; a
+#     huge swath of cloud CLIs (tccli, awscli, …) are Python. Ship a usable
+#     Python so cloud_bash commands can call them.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git openssh-client ca-certificates tzdata libgomp1 libstdc++6 curl \
+        python3 python3-pip \
     && rm -rf /var/lib/apt/lists/*
+
+# Pre-install the Tencent Cloud CLI system-wide so cloud_bash can run `tccli`
+# directly. Done at build time (as root, --break-system-packages for PEP 668)
+# so it lands on the system PATH and survives container recreation — the
+# sandbox is non-root, so a runtime `pip install` would otherwise fail. This
+# is a test-env/demo convenience; the cleaner open-core path is shipping each
+# vendor CLI as a marketplace skill that drops a binary into <pack>/bin.
+RUN pip3 install --no-cache-dir --break-system-packages tccli \
+    && tccli --version >/dev/null 2>&1 || true
 
 # ONNX Runtime shared library. Pin the version so a future apt-mirror
 # bump doesn't silently change ABI. v1.20.1 is the latest stable that
