@@ -33,6 +33,7 @@ func NewHandler(uc *bizflow.Usecase) *Handler { return &Handler{uc: uc} }
 func (h *Handler) Register(r chi.Router) {
 	r.Get("/v1/flows", h.list)
 	r.With(h.requireWriter).Post("/v1/flows", h.create)
+	r.With(h.requireWriter).Post("/v1/flows/generate", h.generate)
 	r.Get("/v1/flows/{id}", h.get)
 	r.With(h.requireWriter).Put("/v1/flows/{id}", h.update)
 	r.With(h.requireWriter).Delete("/v1/flows/{id}", h.del)
@@ -192,6 +193,32 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		GraphJSON:   string(in.Graph),
 		CreatedBy:   &t.UserID,
 	})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, toFlowDTO(f, true))
+}
+
+// generate turns a natural-language prompt into a workflow: the model drafts a
+// graph from the live tool catalog, we validate + persist it, and return the
+// new flow so the SPA opens it in the editor for review.
+func (h *Handler) generate(w http.ResponseWriter, r *http.Request) {
+	t, _ := tenantctx.From(r.Context())
+	var in struct {
+		Prompt string `json:"prompt"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in); err != nil {
+		writeErr(w, errors.Join(errs.ErrInvalid, err))
+		return
+	}
+	draft, err := h.uc.GenerateGraph(r.Context(), in.Prompt)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	draft.CreatedBy = &t.UserID
+	f, err := h.uc.Create(r.Context(), draft)
 	if err != nil {
 		writeErr(w, err)
 		return

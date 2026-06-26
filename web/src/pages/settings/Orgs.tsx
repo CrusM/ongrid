@@ -300,7 +300,7 @@ export default function SettingsOrgs() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[280px_1fr]">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
         {/* 左：组织列表 */}
         <Card className="p-3">
           <div className="mb-2 flex items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-950/60 px-2">
@@ -582,8 +582,8 @@ function MemberTable({
                   ))}
                 </select>
               </td>
-              <td className="px-4 py-2.5">
-                <Button variant="danger" onClick={() => onRemove(m)}>
+              <td className="px-3 py-2.5 text-right">
+                <Button variant="danger" onClick={() => onRemove(m)} className="whitespace-nowrap">
                   <UserMinus size={11} />
                   {tr('移除', 'Remove')}
                 </Button>

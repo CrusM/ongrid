@@ -60,6 +60,7 @@ type Usecase struct {
 	runs    RunRepo
 	engine  *Engine
 	catalog ToolCatalog
+	llm     GenLLM
 	log     *slog.Logger
 }
 

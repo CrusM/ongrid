@@ -41,7 +41,7 @@ import { useI18n } from '@/i18n/locale';
 // Button / Chip / EmptyState, zinc palette, tr() for every string).
 
 const inputClass =
-  'w-full rounded-md border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-600 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60';
+  'w-full rounded-md border border-zinc-800 bg-zinc-950/60 px-2.5 py-1.5 text-[13px] text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-600 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60';
 
 const NONE = '__none__';
 
@@ -184,7 +184,7 @@ export default function McpPage() {
               {tr('刷新', 'Refresh')}
             </Button>
             {isAdmin && (
-              <Button onClick={() => setEditing({ id: null, input: emptyInput() })} variant="subtle">
+              <Button onClick={() => setEditing({ id: null, input: emptyInput() })} variant="primary">
                 <Plus size={13} />
                 {tr('新建', 'New server')}
               </Button>
@@ -473,7 +473,7 @@ function ServerEditor({
           <Button onClick={onClose} variant="ghost">
             {tr('取消', 'Cancel')}
           </Button>
-          <Button onClick={onSave} disabled={!canSave} variant="subtle">
+          <Button onClick={onSave} disabled={!canSave} variant="primary">
             {saving ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
             {saving ? tr('保存中…', 'Saving…') : tr('保存', 'Save')}
           </Button>

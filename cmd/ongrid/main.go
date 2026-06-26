@@ -1609,7 +1609,8 @@ func main() {
 	}
 	flowUC := managerbizflow.NewUsecase(flowRepo, flowRunRepo,
 		managerbizflow.NewEngine(flowExec, flowRunRepo, log), log).
-		WithToolCatalog(flowToolCatalog{reg: toolsReg})
+		WithToolCatalog(flowToolCatalog{reg: toolsReg}).
+		WithLLM(flowLLMRunner{client: llmClient})
 	flowUC.HealStaleRuns(rootCtx)
 	// HLD-016 triggers: alert dispatcher (auto-start matching flows when an
 	// alert fires) + cron scheduler (time-based flows). Both nil-safe and

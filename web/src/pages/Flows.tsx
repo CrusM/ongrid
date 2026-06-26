@@ -3,12 +3,13 @@
 // create / open / run / toggle / delete.
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Play, Plus, Search, Trash2, Workflow as WorkflowIcon } from 'lucide-react';
+import { Loader2, Play, Plus, Search, Sparkles, Trash2, Workflow as WorkflowIcon } from 'lucide-react';
 
-import { createFlow, deleteFlow, listFlows, runFlow, toggleFlow, type Flow } from '@/api/flows';
+import { createFlow, deleteFlow, generateFlow, listFlows, runFlow, toggleFlow, type Flow } from '@/api/flows';
 import { useI18n } from '@/i18n/locale';
 import { useAuth } from '@/store/auth';
 import { PageHeader, Button } from '@/components/ui';
+import { Modal } from '@/components/Modal';
 import { cn } from '@/lib/cn';
 
 export default function FlowsPage() {
@@ -21,7 +22,6 @@ export default function FlowsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [creating, setCreating] = useState(false);
-  const [newName, setNewName] = useState('');
   const [busyId, setBusyId] = useState<number | null>(null);
   const [notice, setNotice] = useState('');
   const [search, setSearch] = useState('');
@@ -67,20 +67,6 @@ export default function FlowsPage() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
-
-  const onCreate = async () => {
-    const name = newName.trim();
-    if (!name) return;
-    setBusyId(-1);
-    try {
-      const f = await createFlow({ name });
-      navigate(`/workflows/${f.id}`);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusyId(null);
-    }
-  };
 
   const onRun = async (f: Flow) => {
     setBusyId(f.id);
@@ -129,7 +115,7 @@ export default function FlowsPage() {
           `Wire trigger → agent / tool / condition / notify nodes into automations · ${items.length} total`,
         )}
         actions={
-          canWrite && !creating ? (
+          canWrite ? (
             <Button variant="primary" onClick={() => setCreating(true)}>
               <Plus size={14} />
               {tr('新建工作流', 'New workflow')}
@@ -158,28 +144,6 @@ export default function FlowsPage() {
         </div>
       )}
       <div className="flex-1 overflow-y-auto px-6 py-4">
-
-      {creating && (
-        <div className="mb-4 flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
-          <input
-            autoFocus
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void onCreate();
-              if (e.key === 'Escape') setCreating(false);
-            }}
-            placeholder={tr('工作流名称，如：磁盘告警自动处置', 'Workflow name, e.g. disk-alert auto-remediation')}
-            className="flex-1 rounded-md border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-xs text-zinc-200 outline-none focus:border-zinc-600"
-          />
-          <Button variant="primary" onClick={() => void onCreate()} disabled={busyId === -1 || !newName.trim()}>
-            {tr('创建', 'Create')}
-          </Button>
-          <Button variant="ghost" onClick={() => setCreating(false)}>
-            {tr('取消', 'Cancel')}
-          </Button>
-        </div>
-      )}
 
       {error && (
         <div className="mb-4 rounded-md border border-red-900/50 bg-red-950/30 px-3 py-2 text-xs text-red-400">{error}</div>
@@ -269,6 +233,122 @@ export default function FlowsPage() {
         </div>
       )}
       </div>
+      <CreateFlowModal
+        open={creating}
+        onClose={() => setCreating(false)}
+        onCreated={(id) => navigate(`/workflows/${id}`)}
+      />
     </main>
+  );
+}
+
+// CreateFlowModal — create a workflow either by name (blank canvas) or by
+// describing it in natural language and letting the model draft the graph.
+function CreateFlowModal({
+  open,
+  onClose,
+  onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreated: (id: number) => void;
+}) {
+  const { tr } = useI18n();
+  const [mode, setMode] = useState<'ai' | 'name'>('ai');
+  const [name, setName] = useState('');
+  const [prompt, setPrompt] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  if (!open) return null;
+  const canSubmit = mode === 'ai' ? prompt.trim().length >= 5 : name.trim().length > 0;
+  const submit = async () => {
+    if (!canSubmit) return;
+    setBusy(true);
+    setErr('');
+    try {
+      const f = mode === 'ai' ? await generateFlow(prompt.trim()) : await createFlow({ name: name.trim() });
+      onCreated(f.id);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={tr('新建工作流', 'New workflow')}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            {tr('取消', 'Cancel')}
+          </Button>
+          <Button variant="primary" onClick={() => void submit()} disabled={!canSubmit || busy}>
+            {busy ? <Loader2 size={12} className="animate-spin" /> : mode === 'ai' ? <Sparkles size={12} /> : <Plus size={12} />}
+            {busy
+              ? mode === 'ai'
+                ? tr('生成中…', 'Generating…')
+                : tr('创建中…', 'Creating…')
+              : mode === 'ai'
+                ? tr('AI 生成', 'Generate')
+                : tr('创建', 'Create')}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <div className="inline-flex rounded-md border border-zinc-800 p-0.5 text-xs">
+          <button
+            type="button"
+            onClick={() => setMode('ai')}
+            className={`rounded px-3 py-1 transition-colors ${mode === 'ai' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'}`}
+          >
+            ✨ {tr('AI 生成', 'AI generate')}
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('name')}
+            className={`rounded px-3 py-1 transition-colors ${mode === 'name' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'}`}
+          >
+            {tr('手动命名', 'Blank')}
+          </button>
+        </div>
+        {mode === 'ai' ? (
+          <label className="block">
+            <span className="mb-1 block text-[11px] text-zinc-400">
+              {tr('用一句话描述你要的工作流，AI 自动连好节点和数据流', 'Describe the workflow; the model drafts the nodes & data flow')}
+            </span>
+            <textarea
+              autoFocus
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              rows={4}
+              placeholder={tr(
+                '例如：巡检设备1的负载和Top进程，让 AI 诊断后生成一个网页报告',
+                'e.g. inspect device 1 load + top processes, then AI-diagnose and generate a web report',
+              )}
+              className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 text-[13px] text-zinc-200 outline-none focus:border-zinc-600"
+            />
+            <span className="mt-1 block text-[10px] text-zinc-600">
+              {tr('生成后自动打开编辑器，可以再手动调整', 'Opens in the editor afterwards so you can tweak it')}
+            </span>
+          </label>
+        ) : (
+          <label className="block">
+            <span className="mb-1 block text-[11px] text-zinc-400">{tr('工作流名称', 'Workflow name')}</span>
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && void submit()}
+              placeholder={tr('如：磁盘告警自动处置', 'e.g. disk-alert auto-remediation')}
+              className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 text-[13px] text-zinc-200 outline-none focus:border-zinc-600"
+            />
+          </label>
+        )}
+        {err && <div className="rounded-md border border-red-900/50 bg-red-950/30 px-3 py-2 text-xs text-red-400">{err}</div>}
+      </div>
+    </Modal>
   );
 }

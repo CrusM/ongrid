@@ -70,6 +70,13 @@ export function createFlow(body: { name: string; description?: string; graph?: F
   return request<Flow>('POST', '/flows', body);
 }
 
+// generateFlow turns a natural-language prompt into a workflow (the model
+// drafts a graph from the live tool catalog); the manager validates + persists
+// it and returns the new flow.
+export function generateFlow(prompt: string) {
+  return request<Flow>('POST', '/flows/generate', { prompt });
+}
+
 export function updateFlow(id: number, body: { name?: string; description?: string; graph?: FlowGraph }) {
   return request<Flow>('PUT', `/flows/${id}`, body);
 }
